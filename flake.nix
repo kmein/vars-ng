@@ -18,6 +18,15 @@
         src = ./.;
         pyproject = true;
         build-system = [ pkgs.python3Packages.hatchling ];
+        nativeCheckInputs = [ pkgs.ty pkgs.ruff ];
+        
+        checkPhase = ''
+          runHook preCheck
+          ty check .
+          ruff check .
+          ruff format --check .
+          runHook postCheck
+        '';
       };
     in
     {
