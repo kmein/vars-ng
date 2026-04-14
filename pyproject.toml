@@ -15,3 +15,6 @@ vars-ng = "main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
+
+[tool.hatch.build.targets.wheel.force-include]
+"options.nix" = "vars_ng/options.nix"
