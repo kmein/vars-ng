@@ -103,63 +103,57 @@ def get_file_dest_path(output_dir: str, file_config: FileConfig) -> Path:
     return Path(output_dir) / visibility / generator_name / name
 
 
+class HttpError(Exception):
+    def __init__(self, code: int, message: str):
+        self.code = code
+        self.message = message
+
+
 def make_handler(generators: Dict[str, GeneratorConfig], output_dir: str):
     class Handler(http.server.SimpleHTTPRequestHandler):
         def log_message(self, format, *args):
             pass  # Suppress logging
 
-        def do_GET(self):
-            parts = self.path.strip("/").split("/")
-            if len(parts) == 2:
-                dep_name, file_name = parts
-                dep_gen = generators.get(dep_name)
-                if not dep_gen:
-                    self.send_error(404, "Generator not found")
-                    return
-
-                file_config = None
-                for fc in dep_gen["files"].values():
-                    if fc["name"] == file_name:
-                        file_config = fc
-                        break
-                if not file_config:
-                    self.send_error(404, "File not found")
-                    return
-
-                path = get_file_dest_path(output_dir, file_config)
-                if not path.exists():
-                    self.send_error(404, "File not generated yet")
-                    return
-
-                self.send_response(200)
-                self.send_header("Content-type", "application/octet-stream")
-                self.send_header("Content-Length", str(path.stat().st_size))
-                self.end_headers()
-                with open(path, "rb") as f:
-                    shutil.copyfileobj(f, self.wfile)
-            else:
-                self.send_error(400, "Bad Request")
-
-        def do_POST(self):
+        def _get_file_config(self) -> FileConfig:
             parts = self.path.strip("/").split("/")
             if len(parts) != 2:
-                self.send_error(400, "Bad Request")
-                return
+                raise HttpError(400, "Bad Request")
 
             gen_name, file_name = parts
-            current_gen = generators.get(gen_name)
-            if not current_gen:
-                self.send_error(404, "Generator not found")
+            gen = generators.get(gen_name)
+            if not gen:
+                raise HttpError(404, "Generator not found")
+
+            for fc in gen["files"].values():
+                if fc["name"] == file_name:
+                    return fc
+
+            raise HttpError(404, "File not found in generator")
+
+        def do_GET(self):
+            try:
+                file_config = self._get_file_config()
+            except HttpError as e:
+                self.send_error(e.code, e.message)
                 return
 
-            file_config = None
-            for fc in current_gen["files"].values():
-                if fc["name"] == file_name:
-                    file_config = fc
-                    break
+            path = get_file_dest_path(output_dir, file_config)
+            if not path.exists():
+                self.send_error(404, "File not generated yet")
+                return
 
-            if not file_config:
-                self.send_error(404, "File not defined in generator")
+            self.send_response(200)
+            self.send_header("Content-type", "application/octet-stream")
+            self.send_header("Content-Length", str(path.stat().st_size))
+            self.end_headers()
+            with open(path, "rb") as f:
+                shutil.copyfileobj(f, self.wfile)
+
+        def do_POST(self):
+            try:
+                file_config = self._get_file_config()
+            except HttpError as e:
+                self.send_error(e.code, e.message)
                 return
 
             content_length = int(self.headers.get("Content-Length", 0))
@@ -176,7 +170,9 @@ def make_handler(generators: Dict[str, GeneratorConfig], output_dir: str):
                 try:
                     dest_path.chmod(int(mode_str, 8))
                 except ValueError:
-                    print(f"Warning: Invalid mode '{mode_str}' for {file_name}")
+                    print(
+                        f"Warning: Invalid mode '{mode_str}' for {file_config['name']}"
+                    )
 
             self.send_response(200)
             self.end_headers()
@@ -187,10 +183,11 @@ def make_handler(generators: Dict[str, GeneratorConfig], output_dir: str):
 class GeneratorRunner(abc.ABC):
     """
     Abstract base class for executing configuration generators.
-    
+
     Provides a context manager interface for setting up and tearing down
     any necessary execution environment (like temporary directories or servers).
     """
+
     def __init__(
         self,
         generators: Dict[str, GeneratorConfig],
@@ -215,11 +212,12 @@ class GeneratorRunner(abc.ABC):
 class LocalRunner(GeneratorRunner):
     """
     Executes generators locally without isolation.
-    
+
     Uses standard temporary directories to provide inputs and capture outputs.
     Dependencies are copied directly on the host filesystem. This is useful for
     testing or environments where Nix sandboxing is unavailable.
     """
+
     def run(self, gen_name: str, gen: GeneratorConfig) -> None:
         """Runs the specified generator without a nix sandbox (using temporary directories directly)."""
         old_umask = os.umask(0o077)
@@ -294,11 +292,12 @@ class LocalRunner(GeneratorRunner):
 class SandboxRunner(GeneratorRunner):
     """
     Executes generators strictly isolated within a Nix sandbox.
-    
+
     Starts a background HTTP server listening on a Unix domain socket. The
     sandboxed generator script uses `curl` over this socket to fetch its
     declared dependencies and to upload its generated outputs back to the host.
     """
+
     def __enter__(self):
         self.tmpdir = Path("/tmp/sandbox-test")
         self.tmpdir.mkdir(parents=True, exist_ok=True)

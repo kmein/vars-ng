@@ -10,7 +10,7 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-      python = pkgs.python3.withPackages (ps: with ps; [ uv ty ruff ]);
+      python = pkgs.python3.withPackages (ps: with ps; [ ty ruff ]);
 
       vars-ng = pkgs.python3Packages.buildPythonApplication {
         pname = "vars-ng";
