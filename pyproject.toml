@@ -11,10 +11,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
-vars-ng = "main:main"
+vars-ng = "vars_ng.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+packages = ["vars_ng"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"options.nix" = "vars_ng/options.nix"
+"vars_ng/options.nix" = "vars_ng/options.nix"
+

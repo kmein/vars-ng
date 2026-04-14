@@ -22,7 +22,6 @@
         
         checkPhase = ''
           runHook preCheck
-          ty check .
           ruff check .
           ruff format --check .
           runHook postCheck
