@@ -12,11 +12,15 @@ from .models import GeneratorConfig
 def generator_needs_run(
     gen: GeneratorConfig, output_dir: str, rebuilt: set[str]
 ) -> bool:
-    # If any dependency was rebuilt during this run, we must run
+    """Determines whether a generator needs to be run based on its dependencies and output files.
+
+    A generator needs to be run if:
+    - Any of its dependencies were rebuilt during this run (i.e., are in the `rebuilt` set).
+    - Any of its output files are missing from the output directory.
+    """
     if any(dep in rebuilt for dep in gen["dependencies"]):
         return True
 
-    # If any output file is missing, we must run
     for file_config in gen["files"].values():
         path = get_file_dest_path(output_dir, file_config)
         if not path.exists():
@@ -71,7 +75,7 @@ def handle_regenerate(args: argparse.Namespace) -> None:
 
     for gen_name in to_regenerate:
         gen = generators[gen_name]
-        for file_name, file_config in gen["files"].items():
+        for file_config in gen["files"].values():
             path = get_file_dest_path(args.output_dir, file_config)
             if path.exists():
                 if args.dry_run:
@@ -140,7 +144,7 @@ def handle_garbage_collect(args: argparse.Namespace) -> None:
 def handle_evaluate(args: argparse.Namespace) -> None:
     data = evaluate_config(args.configuration, args.nixpkgs)
 
-    # Check for cycles
+    # Check for cycles. This will raise an error if a cycle is detected.
     get_execution_order(data)
 
     existing_files = []
@@ -171,7 +175,9 @@ def main() -> None:
         "--configuration",
         type=Path,
         required="VARS_CONFIG" not in os.environ,
-        default=Path(os.environ["VARS_CONFIG"]) if "VARS_CONFIG" in os.environ else None,
+        default=Path(os.environ["VARS_CONFIG"])
+        if "VARS_CONFIG" in os.environ
+        else None,
         help="Path to config.nix (required unless $VARS_CONFIG is set)",
     )
     parser.add_argument(
@@ -202,9 +208,9 @@ def main() -> None:
 
     # regenerate subcommand
     regenerate_parser = subparsers.add_parser(
-        "regenerate", help="Regenerate a specific target and its dependencies"
+        "regenerate", help="Regenerate a specific var and its dependencies"
     )
-    regenerate_parser.add_argument("target", help="Name of the generator to regenerate")
+    regenerate_parser.add_argument("target", help="Name of the var to regenerate")
 
     # garbage-collect subcommand
     subparsers.add_parser(

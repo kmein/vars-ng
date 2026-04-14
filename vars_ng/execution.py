@@ -35,14 +35,14 @@ def make_handler(generators: Dict[str, GeneratorConfig], output_dir: str):
             if len(parts) != 2:
                 raise HttpError(400, "Bad Request")
 
-            gen_name, file_name = parts
-            gen = generators.get(gen_name)
-            if not gen:
+            var_name, file_name = parts
+            var = generators.get(var_name)
+            if not var:
                 raise HttpError(404, "Generator not found")
 
-            for fc in gen["files"].values():
-                if fc["name"] == file_name:
-                    return fc
+            for file_config in var["files"].values():
+                if file_config["name"] == file_name:
+                    return file_config
 
             raise HttpError(404, "File not found in generator")
 
@@ -121,7 +121,7 @@ class GeneratorRunner(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def generate(self, gen_name: str, gen: GeneratorConfig) -> None:
+    def generate(self, var_name: str, var: GeneratorConfig) -> None:
         pass
 
 
@@ -134,7 +134,7 @@ class LocalRunner(GeneratorRunner):
     testing or environments where Nix sandboxing is unavailable.
     """
 
-    def generate(self, gen_name: str, gen: GeneratorConfig) -> None:
+    def generate(self, var_name: str, var: GeneratorConfig) -> None:
         """Runs the specified generator without a nix sandbox (using temporary directories directly)."""
         old_umask = os.umask(0o077)
         try:
@@ -146,11 +146,11 @@ class LocalRunner(GeneratorRunner):
                 out_dir.mkdir()
 
                 # Set up inputs from dependencies
-                for dep_name in gen["dependencies"]:
+                for dep_name in var["dependencies"]:
                     dep_gen = self.generators[dep_name]
                     dep_dir = in_dir / dep_name
                     dep_dir.mkdir(exist_ok=True)
-                    for file_name, file_config in dep_gen["files"].items():
+                    for file_config in dep_gen["files"].values():
                         src_path = get_file_dest_path(self.output_dir, file_config)
                         dest_path = dep_dir / file_config["name"]
                         if src_path.exists():
@@ -162,14 +162,13 @@ class LocalRunner(GeneratorRunner):
                 env["out"] = str(out_dir)
 
                 # Prepare PATH with runtimeInputs
-                runtime_inputs = gen["runtimeInputs"]
+                runtime_inputs = var["runtimeInputs"]
                 bin_paths = [str(Path(p) / "bin") for p in runtime_inputs]
                 if bin_paths:
-                    # Add existing PATH so standard tools (like bash itself, if not in runtimeInputs) are still available
-                    env["PATH"] = ":".join(bin_paths) + ":" + env.get("PATH", "")
+                    env["PATH"] = ":".join(bin_paths)
 
                 # Write and execute script
-                script_content = gen["script"]
+                script_content = var["script"]
                 script_path = temp_dir / "script.sh"
                 script_path.write_text(
                     f"#!/usr/bin/env bash\nset -euo pipefail\numask 077\n{script_content}"
@@ -181,11 +180,11 @@ class LocalRunner(GeneratorRunner):
                         [str(script_path)], env=env, check=True, cwd=str(temp_dir)
                     )
                 except subprocess.CalledProcessError:
-                    print(f"Error executing script for generator {gen_name}")
+                    print(f"Error executing script for generator {var_name}")
                     exit(1)
 
                 # Move generated files to destination
-                for file_config in gen["files"].values():
+                for file_config in var["files"].values():
                     name = file_config["name"]
                     dest_path = get_file_dest_path(self.output_dir, file_config)
 
@@ -238,8 +237,8 @@ class SandboxRunner(GeneratorRunner):
 
     def generate(
         self,
-        gen_name: str,
-        gen: GeneratorConfig,
+        var_name: str,
+        var: GeneratorConfig,
     ) -> None:
         """Runs the specified generator inside a nix sandbox using a unix socket to fetch/write files."""
         with tempfile.TemporaryDirectory() as temp_dir_str:
@@ -249,7 +248,7 @@ class SandboxRunner(GeneratorRunner):
             setup_script = ["export in=$(mktemp -d)", "export out=$(mktemp -d)"]
 
             # Fetch dependencies
-            for dep_name in gen["dependencies"]:
+            for dep_name in var["dependencies"]:
                 dep_gen = self.generators[dep_name]
                 setup_script.append(f"mkdir -p $in/{dep_name}")
                 for file_config in dep_gen["files"].values():
@@ -258,19 +257,19 @@ class SandboxRunner(GeneratorRunner):
                         f"curl --fail -s --unix-socket {self.socket_path} http://localhost/{dep_name}/{file_name} -o $in/{dep_name}/{file_name}"
                     )
 
-            script_content = gen["script"]
+            script_content = var["script"]
 
             # Upload outputs
             upload_script = []
-            for file_config in gen["files"].values():
+            for file_config in var["files"].values():
                 file_name = file_config["name"]
                 upload_script.append(
-                    f"curl --fail -s -X POST --unix-socket {self.socket_path} --data-binary @$out/{file_name} http://localhost/{gen_name}/{file_name}"
+                    f"curl --fail -s -X POST --unix-socket {self.socket_path} --data-binary @$out/{file_name} http://localhost/{var_name}/{file_name}"
                 )
 
             full_script = (
                 "set -euo pipefail\n"
-                + "\n("
+                + "\n(" # run in a subshell to avoid overwriting the Nix environment's $out
                 + "\n".join(setup_script)
                 + "\n"
                 + script_content
@@ -279,14 +278,14 @@ class SandboxRunner(GeneratorRunner):
                 + "mkdir -p $out\n"
             )
 
-            runtime_inputs_str = " ".join(gen["runtimeInputs"])
+            runtime_inputs_str = " ".join(var["runtimeInputs"])
             nixpkgs = self.nixpkgs_path or "<nixpkgs>"
 
             nix_expr = f"""
             let
               pkgs = import {nixpkgs} {{}};
             in
-            pkgs.runCommand "vars-generator-{gen_name}" {{
+            pkgs.runCommand "vars-generator-{var_name}" {{
               buildInputs = [ pkgs.curl ] ++ [ {runtime_inputs_str} ];
             }} ''
               {full_script}
@@ -305,8 +304,6 @@ class SandboxRunner(GeneratorRunner):
                 str(expr_path),
             ]
 
-            # Use an environment with NIX_PATH set or a clean environment where nix can run properly.
-            # Ensure we can use nix-build and it can access its store and network.
             env = os.environ.copy()
             if self.nixpkgs_path:
                 env["NIX_PATH"] = f"nixpkgs={self.nixpkgs_path}"
@@ -314,5 +311,5 @@ class SandboxRunner(GeneratorRunner):
             try:
                 subprocess.run(cmd, env=env, check=True)
             except subprocess.CalledProcessError:
-                print(f"Error executing script for generator {gen_name}")
+                print(f"Error executing script for generator {var_name}")
                 exit(1)
