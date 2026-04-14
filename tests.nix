@@ -252,4 +252,105 @@
         assert pubkey_content.startswith("ssh-ed25519 "), "Generated public key doesn't look valid"
       '';
     };
+
+  scriptFailureAndAtomicityTest =
+    let
+      configFailure = pkgs.writeText "config-failure.nix" ''
+        {
+          vars.generators = {
+            fails = {
+              files.partial = { };
+              script = '''
+                echo "im partial" > "$out"/partial
+                exit 1
+              ''';
+            };
+          };
+        }
+      '';
+    in
+    pkgs.testers.runNixOSTest {
+      name = "vars-ng script failure and atomicity";
+      nodes.machine = { pkgs, ... }: {
+        environment.systemPackages = [ vars-ng ];
+        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
+      };
+      testScript = ''
+        start_all()
+        machine.succeed("mkdir -p /tmp/workdir5")
+        
+        # Command should fail
+        machine.fail("cd /tmp/workdir5 && vars-ng generate ${configFailure}")
+        
+        # Verify the partial file never made it to the final output directory
+        machine.fail("test -f /tmp/workdir5/output/secret/fails/partial")
+      '';
+    };
+
+  dryRunSafetyTest =
+    let
+      configDryRun = pkgs.writeText "config-dry-run.nix" ''
+        {
+          vars.generators = {
+            a = { files.a = { }; script = "echo a_run > \"$out\"/a"; };
+          };
+        }
+      '';
+    in
+    pkgs.testers.runNixOSTest {
+      name = "vars-ng dry run safety";
+      nodes.machine = { pkgs, ... }: {
+        environment.systemPackages = [ vars-ng ];
+        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
+      };
+      testScript = ''
+        start_all()
+        machine.succeed("mkdir -p /tmp/workdir6")
+        
+        # Execute dry runs
+        machine.succeed("cd /tmp/workdir6 && vars-ng generate --dry-run ${configDryRun}")
+        machine.succeed("cd /tmp/workdir6 && vars-ng regenerate a --dry-run ${configDryRun}")
+        
+        # Assert nothing was created
+        machine.fail("test -d /tmp/workdir6/output")
+      '';
+    };
+
+  multipleDependenciesTest =
+    let
+      configMultiDeps = pkgs.writeText "config-multi-deps.nix" ''
+        {
+          vars.generators = {
+            a = { files.a = { }; script = "echo a_val > \"$out\"/a"; };
+            b = { files.b = { }; script = "echo b_val > \"$out\"/b"; };
+            c = {
+              dependencies = [ "a" "b" ];
+              files.c = { };
+              script = '''
+                cat "$in"/a/a > "$out"/c
+                cat "$in"/b/b >> "$out"/c
+              ''';
+            };
+          };
+        }
+      '';
+    in
+    pkgs.testers.runNixOSTest {
+      name = "vars-ng multiple dependencies";
+      nodes.machine = { pkgs, ... }: {
+        environment.systemPackages = [ vars-ng ];
+        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
+      };
+      testScript = ''
+        start_all()
+        machine.succeed("mkdir -p /tmp/workdir7")
+        
+        # Generate c, which pulls from both a and b
+        machine.succeed("cd /tmp/workdir7 && vars-ng generate ${configMultiDeps}")
+        
+        # Verify c aggregated both upstream outputs successfully
+        out_c = machine.succeed("cat /tmp/workdir7/output/secret/c/c").strip()
+        assert out_c == "a_val\nb_val", f"Expected 'a_val\\nb_val', got '{out_c}'"
+      '';
+    };
 }
