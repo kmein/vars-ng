@@ -353,4 +353,62 @@
         assert out_c == "a_val\nb_val", f"Expected 'a_val\\nb_val', got '{out_c}'"
       '';
     };
+
+  garbageCollectTest =
+    let
+      configInitial = pkgs.writeText "config-initial.nix" ''
+        {
+          vars.generators = {
+            a = { files.a = { }; script = "echo a > \"$out\"/a"; };
+            b = { files.b = { }; script = "echo b > \"$out\"/b"; };
+            c = { files.c = { }; script = "echo c > \"$out\"/c"; };
+          };
+        }
+      '';
+      configRemoved = pkgs.writeText "config-removed.nix" ''
+        {
+          vars.generators = {
+            a = { files.a = { }; script = "echo a > \"$out\"/a"; };
+            # b and c are removed
+          };
+        }
+      '';
+    in
+    pkgs.testers.runNixOSTest {
+      name = "vars-ng garbage collect";
+      nodes.machine = { pkgs, ... }: {
+        environment.systemPackages = [ vars-ng ];
+        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
+      };
+      testScript = ''
+        start_all()
+        machine.succeed("mkdir -p /tmp/workdir_gc")
+        
+        # 1. Initial generation of a, b, c
+        machine.succeed("cd /tmp/workdir_gc && vars-ng --configuration ${configInitial} generate")
+        machine.succeed("test -f /tmp/workdir_gc/output/secret/a/a")
+        machine.succeed("test -f /tmp/workdir_gc/output/secret/b/b")
+        machine.succeed("test -f /tmp/workdir_gc/output/secret/c/c")
+        
+        # Add a random manual file to output to ensure gc deletes untracked things correctly
+        machine.succeed("mkdir -p /tmp/workdir_gc/output/secret/rogue")
+        machine.succeed("touch /tmp/workdir_gc/output/secret/rogue/unknown")
+
+        # 2. Switch to config where b and c are removed and garbage-collect
+        machine.succeed("cd /tmp/workdir_gc && vars-ng --configuration ${configRemoved} garbage-collect")
+
+        # 3. Assert a remains
+        machine.succeed("test -f /tmp/workdir_gc/output/secret/a/a")
+        
+        # Assert b, c, and rogue are permanently removed
+        machine.fail("test -f /tmp/workdir_gc/output/secret/b/b")
+        machine.fail("test -f /tmp/workdir_gc/output/secret/c/c")
+        machine.fail("test -f /tmp/workdir_gc/output/secret/rogue/unknown")
+        
+        # Assert the b, c, and rogue empty directories are cleanly purged too
+        machine.fail("test -d /tmp/workdir_gc/output/secret/b")
+        machine.fail("test -d /tmp/workdir_gc/output/secret/c")
+        machine.fail("test -d /tmp/workdir_gc/output/secret/rogue")
+      '';
+    };
 }

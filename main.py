@@ -234,6 +234,56 @@ def handle_regenerate(args: argparse.Namespace) -> None:
     # Fall back to normal generate flow to rebuild the missing files
     handle_generate(args)
 
+def handle_garbage_collect(args: argparse.Namespace) -> None:
+    generators = evaluate_config(args.configuration, args.nixpkgs)
+    output_dir = Path(args.output_dir)
+
+    if not output_dir.exists() or not output_dir.is_dir():
+        print(f"Output directory {output_dir} does not exist. Nothing to collect.")
+        return
+
+    # Collect all expected file paths
+    expected_files = set()
+    for gen in generators.values():
+        for file_config in gen["files"].values():
+            expected_files.add(get_file_dest_path(args.output_dir, file_config).resolve())
+
+    # Find all actual files in the output directory
+    files_deleted = 0
+    dirs_deleted = 0
+    
+    # Walk bottom-up so we can delete empty directories after their files are removed
+    for root, dirs, files in os.walk(output_dir, topdown=False):
+        current_dir = Path(root)
+        
+        # Check files
+        for file_name in files:
+            file_path = current_dir / file_name
+            if file_path.resolve() not in expected_files:
+                if args.dry_run:
+                    print(f"Would delete orphaned file: {file_path}")
+                else:
+                    print(f"Deleting orphaned file: {file_path}")
+                    file_path.unlink()
+                files_deleted += 1
+                
+        # Check directories (delete if empty)
+        for dir_name in dirs:
+            dir_path = current_dir / dir_name
+            if dir_path.exists() and not any(dir_path.iterdir()):
+                if args.dry_run:
+                    print(f"Would delete empty directory: {dir_path}")
+                else:
+                    print(f"Deleting empty directory: {dir_path}")
+                    dir_path.rmdir()
+                dirs_deleted += 1
+
+    if files_deleted == 0 and dirs_deleted == 0:
+        print("No orphaned files or directories found.")
+    else:
+        action = "Would collect" if args.dry_run else "Collected"
+        print(f"{action} {files_deleted} files and {dirs_deleted} directories.")
+
 def handle_evaluate(args: argparse.Namespace) -> None:
     data = evaluate_config(args.configuration, args.nixpkgs)
 
@@ -275,6 +325,9 @@ def main() -> None:
     regenerate_parser = subparsers.add_parser("regenerate", help="Regenerate a specific target and its dependencies")
     regenerate_parser.add_argument("target", help="Name of the generator to regenerate")
 
+    # garbage-collect subcommand
+    gc_parser = subparsers.add_parser("garbage-collect", help="Delete all vars from the output directory that are not declared")
+
     # evaluate subcommand
     evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate configuration")
 
@@ -284,6 +337,8 @@ def main() -> None:
         handle_generate(args)
     elif args.command == "regenerate":
         handle_regenerate(args)
+    elif args.command == "garbage-collect":
+        handle_garbage_collect(args)
     elif args.command == "evaluate":
         handle_evaluate(args)
 
