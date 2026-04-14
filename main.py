@@ -164,7 +164,7 @@ def generator_needs_run(gen: GeneratorConfig, output_dir: str, rebuilt: set[str]
     return False
 
 def handle_generate(args: argparse.Namespace) -> None:
-    generators = evaluate_config(args.config_nix, args.nixpkgs)
+    generators = evaluate_config(args.configuration, args.nixpkgs)
     sorted_generators = get_sorted_generators(generators)
 
     print("Execution order:")
@@ -209,7 +209,7 @@ def get_descendants(target: str, generators: Dict[str, GeneratorConfig]) -> set[
     return descendants
 
 def handle_regenerate(args: argparse.Namespace) -> None:
-    generators = evaluate_config(args.config_nix, args.nixpkgs)
+    generators = evaluate_config(args.configuration, args.nixpkgs)
 
     if args.target not in generators:
         print(f"Error: Target generator '{args.target}' not found in configuration.")
@@ -235,7 +235,7 @@ def handle_regenerate(args: argparse.Namespace) -> None:
     handle_generate(args)
 
 def handle_evaluate(args: argparse.Namespace) -> None:
-    data = evaluate_config(args.config_nix, args.nixpkgs)
+    data = evaluate_config(args.configuration, args.nixpkgs)
 
     # Check for cycles
     get_sorted_generators(data)
@@ -259,28 +259,24 @@ def handle_evaluate(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="vars-ng CLI")
+    
+    # Global arguments
+    parser.add_argument("--configuration", required="VARS_CONFIG" not in os.environ, default=os.environ.get("VARS_CONFIG"), help="Path to config.nix (required unless $VARS_CONFIG is set)")
+    parser.add_argument("--nixpkgs", default=os.environ.get("VARS_NIXPKGS"), help="Path to nixpkgs tree (default: $VARS_NIXPKGS)")
+    parser.add_argument("--output-dir", default=os.environ.get("VARS_OUTPUT_DIR", "./output"), help="Directory to output generated files (default: ./output or $VARS_OUTPUT_DIR)")
+    parser.add_argument("--dry-run", action="store_true", help="Print what would be done without executing")
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # generate subcommand
     generate_parser = subparsers.add_parser("generate", help="Generate missing configuration")
-    generate_parser.add_argument("config_nix", help="Path to config.nix")
-    generate_parser.add_argument("--nixpkgs", help="Path to nixpkgs tree (avoids relying on <nixpkgs>)")
-    generate_parser.add_argument("--output-dir", default="./output", help="Directory to output generated files")
-    generate_parser.add_argument("--dry-run", action="store_true", help="Print what would be done without executing")
 
     # regenerate subcommand
     regenerate_parser = subparsers.add_parser("regenerate", help="Regenerate a specific target and its dependencies")
     regenerate_parser.add_argument("target", help="Name of the generator to regenerate")
-    regenerate_parser.add_argument("config_nix", help="Path to config.nix")
-    regenerate_parser.add_argument("--nixpkgs", help="Path to nixpkgs tree (avoids relying on <nixpkgs>)")
-    regenerate_parser.add_argument("--output-dir", default="./output", help="Directory to output generated files")
-    regenerate_parser.add_argument("--dry-run", action="store_true", help="Print what would be done without executing")
 
     # evaluate subcommand
     evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate configuration")
-    evaluate_parser.add_argument("config_nix", help="Path to config.nix")
-    evaluate_parser.add_argument("--nixpkgs", help="Path to nixpkgs tree (avoids relying on <nixpkgs>)")
-    evaluate_parser.add_argument("--output-dir", default="./output", help="Directory where generated files are stored")
 
     args = parser.parse_args()
 

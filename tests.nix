@@ -52,9 +52,9 @@
       };
       testScript = ''
         start_all()
-
+        
         machine.succeed("mkdir -p /tmp/workdir1")
-        machine.succeed("cd /tmp/workdir1 && vars-ng generate ${configNix}")
+        machine.succeed("cd /tmp/workdir1 && vars-ng --configuration ${configNix} generate")
 
         out_a = machine.succeed("cat /tmp/workdir1/output/secret/a/a").strip()
         assert out_a == "a", f"Expected 'a', got '{out_a}'"
@@ -63,7 +63,7 @@
 
         machine.succeed("rm /tmp/workdir1/output/secret/a/a")
 
-        machine.succeed("cd /tmp/workdir1 && vars-ng generate ${configNix'}")
+        machine.succeed("cd /tmp/workdir1 && vars-ng --configuration ${configNix'} generate")
 
         out_a2 = machine.succeed("cat /tmp/workdir1/output/secret/a/a").strip()
         assert out_a2 == "changed_a", f"Expected 'changed_a', got '{out_a2}'"
@@ -101,19 +101,19 @@
       };
       testScript = ''
         start_all()
-
+        
         machine.succeed("mkdir -p /tmp/workdir2")
-        machine.succeed("cd /tmp/workdir2 && vars-ng generate ${configIndependent1}")
-
+        machine.succeed("cd /tmp/workdir2 && vars-ng --configuration ${configIndependent1} generate")
+        
         # Get modification times
         a_mtime1 = machine.succeed("stat -c %Y /tmp/workdir2/output/secret/a/a").strip()
         b_mtime1 = machine.succeed("stat -c %Y /tmp/workdir2/output/secret/b/b").strip()
-
+        
         # Wait a second so mtimes will definitively change if touched
         machine.succeed("sleep 1")
-
+        
         # Add 'c' and run generate again
-        machine.succeed("cd /tmp/workdir2 && vars-ng generate ${configIndependent2}")
+        machine.succeed("cd /tmp/workdir2 && vars-ng --configuration ${configIndependent2} generate")
 
         # Verify a and b were skipped (mtimes unchanged)
         a_mtime2 = machine.succeed("stat -c %Y /tmp/workdir2/output/secret/a/a").strip()
@@ -147,19 +147,19 @@
       };
       testScript = ''
         start_all()
-
+        
         machine.succeed("mkdir -p /tmp/workdir3")
-        machine.succeed("cd /tmp/workdir3 && vars-ng generate ${configIndependent2}")
-
+        machine.succeed("cd /tmp/workdir3 && vars-ng --configuration ${configIndependent2} generate")
+        
         # Capture baseline file times
         a_mtime1 = machine.succeed("stat -c %Y /tmp/workdir3/output/secret/a/a").strip()
         b_mtime1 = machine.succeed("stat -c %Y /tmp/workdir3/output/secret/b/b").strip()
         c_mtime1 = machine.succeed("stat -c %Y /tmp/workdir3/output/secret/c/c").strip()
-
+        
         machine.succeed("sleep 1")
-
+        
         # Regenerate 'a'. This should delete and rebuild 'a' and 'b' (descendant), but skip 'c'
-        machine.succeed("cd /tmp/workdir3 && vars-ng regenerate a ${configIndependent2}")
+        machine.succeed("cd /tmp/workdir3 && vars-ng --configuration ${configIndependent2} regenerate a")
 
         a_mtime2 = machine.succeed("stat -c %Y /tmp/workdir3/output/secret/a/a").strip()
         b_mtime2 = machine.succeed("stat -c %Y /tmp/workdir3/output/secret/b/b").strip()
@@ -193,11 +193,11 @@
       };
       testScript = ''
         start_all()
-
-        machine.fail("vars-ng evaluate ${configCycle}")
-        machine.fail("vars-ng generate ${configCycle}")
-
-        output = machine.succeed("vars-ng evaluate ${configCycle} 2>&1 || true")
+        
+        machine.fail("vars-ng --configuration ${configCycle} evaluate")
+        machine.fail("vars-ng --configuration ${configCycle} generate")
+        
+        output = machine.succeed("vars-ng --configuration ${configCycle} evaluate 2>&1 || true")
         assert "Dependency cycle detected" in output, "Expected cycle detection error"
       '';
     };
@@ -235,10 +235,10 @@
       };
       testScript = ''
         start_all()
-
+        
         machine.succeed("mkdir -p /tmp/workdir4")
-        machine.succeed("cd /tmp/workdir4 && vars-ng generate ${configAttrs}")
-
+        machine.succeed("cd /tmp/workdir4 && vars-ng --configuration ${configAttrs} generate")
+        
         # Check public key file attributes
         pub_mode = machine.succeed("stat -c '%a' /tmp/workdir4/output/public/ssh_key/pubkey").strip()
         assert pub_mode == "644", f"Expected public key mode 644, got {pub_mode}"
@@ -280,7 +280,7 @@
         machine.succeed("mkdir -p /tmp/workdir5")
         
         # Command should fail
-        machine.fail("cd /tmp/workdir5 && vars-ng generate ${configFailure}")
+        machine.fail("cd /tmp/workdir5 && vars-ng --configuration ${configFailure} generate")
         
         # Verify the partial file never made it to the final output directory
         machine.fail("test -f /tmp/workdir5/output/secret/fails/partial")
@@ -308,8 +308,8 @@
         machine.succeed("mkdir -p /tmp/workdir6")
         
         # Execute dry runs
-        machine.succeed("cd /tmp/workdir6 && vars-ng generate --dry-run ${configDryRun}")
-        machine.succeed("cd /tmp/workdir6 && vars-ng regenerate a --dry-run ${configDryRun}")
+        machine.succeed("cd /tmp/workdir6 && vars-ng --configuration ${configDryRun} --dry-run generate")
+        machine.succeed("cd /tmp/workdir6 && vars-ng --configuration ${configDryRun} --dry-run regenerate a")
         
         # Assert nothing was created
         machine.fail("test -d /tmp/workdir6/output")
@@ -346,7 +346,7 @@
         machine.succeed("mkdir -p /tmp/workdir7")
         
         # Generate c, which pulls from both a and b
-        machine.succeed("cd /tmp/workdir7 && vars-ng generate ${configMultiDeps}")
+        machine.succeed("cd /tmp/workdir7 && vars-ng --configuration ${configMultiDeps} generate")
         
         # Verify c aggregated both upstream outputs successfully
         out_c = machine.succeed("cat /tmp/workdir7/output/secret/c/c").strip()
