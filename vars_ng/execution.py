@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
-from .models import GeneratorConfig, FileConfig
+from .models import GeneratorConfig, FileConfig, BackendConfig
 from .utils import get_file_dest_path
 
 
@@ -95,17 +95,28 @@ def make_handler(
                 self.send_error(e.code, e.message)
                 return
 
-            path = get_file_dest_path(output_dir, file_config)
-            if not path.exists():
-                self.send_error(404, "File not generated yet")
-                return
-
-            self.send_response(200)
-            self.send_header("Content-type", "application/octet-stream")
-            self.send_header("Content-Length", str(path.stat().st_size))
-            self.end_headers()
-            with open(path, "rb") as f:
-                shutil.copyfileobj(f, self.wfile)
+            backend = gen_to_backend[gen_name]
+            
+            with tempfile.NamedTemporaryFile() as tmp:
+                try:
+                    subprocess.run(
+                        ["bash", "-c", backend["get"], "--", gen_name, file_name],
+                        env={"out": tmp.name},
+                        check=True,
+                        capture_output=True,
+                    )
+                except subprocess.CalledProcessError as e:
+                    self.send_error(500, f"Backend get failed: {e.stderr.decode() if e.stderr else 'unknown'}")
+                    return
+                
+                size = os.path.getsize(tmp.name)
+                self.send_response(200)
+                self.send_header("Content-type", "application/octet-stream")
+                self.send_header("Content-Length", str(size))
+                self.end_headers()
+                
+                with open(tmp.name, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile)
 
         def do_POST(self):
             try:
@@ -124,23 +135,25 @@ def make_handler(
                 return
             post_data = self.rfile.read(content_length)
 
-            dest_path = get_file_dest_path(output_dir, file_config)
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            backend = gen_to_backend[gen_name]
 
-            # Write via tempfile + rename so a crash mid-write never leaves a
-            # half-written secret on disk.
-            tmp_path = dest_path.with_suffix(dest_path.suffix + ".tmp")
-            with open(tmp_path, "wb") as f:
-                f.write(post_data)
-            mode_str = file_config["mode"]
-            if mode_str:
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 try:
-                    tmp_path.chmod(int(mode_str, 8))
-                except ValueError:
-                    print(
-                        f"Warning: Invalid mode '{mode_str}' for {file_config['name']}"
+                    tmp.write(post_data)
+                    tmp.close()
+
+                    subprocess.run(
+                        ["bash", "-c", backend["set"], "--", gen_name, file_name],
+                        env={"in": tmp.name},
+                        check=True,
+                        capture_output=True,
                     )
-            os.replace(tmp_path, dest_path)
+                except subprocess.CalledProcessError as e:
+                    self.send_error(500, f"Backend set failed: {e.stderr.decode() if e.stderr else 'unknown'}")
+                    return
+                finally:
+                    if os.path.exists(tmp.name):
+                        os.unlink(tmp.name)
 
             self.send_response(200)
             self.end_headers()
@@ -159,11 +172,11 @@ class GeneratorRunner(abc.ABC):
     def __init__(
         self,
         generators: Dict[str, GeneratorConfig],
-        output_dir: str,
+        gen_to_backend: Dict[str, BackendConfig],
         nixpkgs_path: Optional[str],
     ):
         self.generators = generators
-        self.output_dir = output_dir
+        self.gen_to_backend = gen_to_backend
         self.nixpkgs_path = nixpkgs_path
 
     def __enter__(self):
@@ -202,11 +215,19 @@ class LocalRunner(GeneratorRunner):
                     dep_gen = self.generators[dep_name]
                     dep_dir = in_dir / dep_name
                     dep_dir.mkdir(exist_ok=True)
+                    backend = self.gen_to_backend[dep_name]
                     for file_config in dep_gen["files"].values():
-                        src_path = get_file_dest_path(self.output_dir, file_config)
-                        dest_path = dep_dir / file_config["name"]
-                        if src_path.exists():
-                            shutil.copy2(src_path, dest_path)
+                        name = file_config["name"]
+                        dest_path = dep_dir / name
+                        try:
+                            subprocess.run(
+                                ["bash", "-c", backend["get"], "--", dep_name, name],
+                                env={"out": str(dest_path)},
+                                check=True,
+                            )
+                        except subprocess.CalledProcessError:
+                            print(f"Error fetching dependency {dep_name}/{name} using backend")
+                            exit(1)
 
                 # Prepare environment
                 env = os.environ.copy()
@@ -236,22 +257,27 @@ class LocalRunner(GeneratorRunner):
                     exit(1)
 
                 # Move generated files to destination
+                backend = self.gen_to_backend[var_name]
                 for file_config in var["files"].values():
                     name = file_config["name"]
-                    dest_path = get_file_dest_path(self.output_dir, file_config)
-
                     src_file = out_dir / name
                     if src_file.exists():
-                        dest_path.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(src_file), str(dest_path))
-
-                        # Set mode
                         mode_str = file_config["mode"]
                         if mode_str:
                             try:
-                                dest_path.chmod(int(mode_str, 8))
+                                src_file.chmod(int(mode_str, 8))
                             except ValueError:
                                 print(f"Warning: Invalid mode '{mode_str}' for {name}")
+
+                        try:
+                            subprocess.run(
+                                ["bash", "-c", backend["set"], "--", var_name, name],
+                                env={"in": str(src_file)},
+                                check=True,
+                            )
+                        except subprocess.CalledProcessError:
+                            print(f"Error setting output {var_name}/{name} using backend")
+                            exit(1)
         finally:
             os.umask(old_umask)
 
