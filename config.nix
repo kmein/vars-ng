@@ -1,3 +1,4 @@
+{ lib, ... }:
 {
   vars.backends.local = {
     get = ''
@@ -10,9 +11,7 @@
     exists = ''
       test -e /var/lib/vars/$1/$2
     '';
-    generators.simple = { };
-    generators.a = { };
-    generators.b = { };
+    generators = lib.genAttrs [ "simple" "a" "b" ] (_: { });
   };
 
   vars.generators = {
