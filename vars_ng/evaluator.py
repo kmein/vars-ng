@@ -22,8 +22,8 @@ def nix_instantiate(expr: str) -> Any:
 
 def evaluate_config(
     configuration_path: Path, nixpkgs_path: Optional[str] = None
-) -> Dict[str, GeneratorConfig]:
-    """Evaluates the given config.nix file and returns a dictionary of generator configurations."""
+) -> "VarsConfig":
+    """Evaluates the given config.nix file and returns the vars configuration."""
     # Note: options.nix is now adjacent to this module instead of main.py
     options_nix_path = Path(__file__).parent / "options.nix"
     config_nix = configuration_path.resolve().as_posix()  # canonicalize
@@ -33,13 +33,23 @@ def evaluate_config(
     nix_expr = f"""
 let
   pkgs = import {nixpkgs_path} {{}};
+  eval = pkgs.lib.evalModules {{
+    modules = [
+      {{ _module.args.pkgs = pkgs; }}
+      {options_nix_path}
+      {config_nix}
+    ];
+  }};
 in
-(pkgs.lib.evalModules {{
-  modules = [
-    {{ _module.args.pkgs = pkgs; }}
-    {options_nix_path}
-    {config_nix}
-  ];
-}}).config.vars.generators
+{{
+  generators = eval.config.vars.generators;
+  backends = eval.config.vars.backends;
+}}
 """
-    return nix_instantiate(nix_expr)
+    from .models import VarsConfig
+    
+    result = nix_instantiate(nix_expr)
+    # Convert generators to a set for each backend
+    for backend in result.get("backends", {}).values():
+        backend["generators"] = set(backend.get("generators", {}).keys())
+    return result
