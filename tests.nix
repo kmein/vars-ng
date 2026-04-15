@@ -465,4 +465,94 @@
         machine.fail("test -f /tmp/workdir_gc/output/secret/rogue/unknown")
       '';
     };
+  sqliteBackendTest =
+    let
+      configSqlite = pkgs.writeText "config-sqlite.nix" ''
+        { pkgs, ... }:
+        {
+          vars.backend-sqlite.enable = true;
+          vars.backend-sqlite.database = "/tmp/workdir_sqlite/vars.db";
+          vars.backend-sqlite.vars = ["a" "b"];
+          vars.generators = {
+            a = { files.a = { }; script = "echo a_run > \"\$out\"/a"; };
+            b = { dependencies = [ "a" ]; files.b = { }; script = "echo b_run > \"\$out\"/b"; };
+          };
+        }
+      '';
+    in
+    pkgs.testers.runNixOSTest {
+      name = "vars-ng sqlite backend";
+      nodes.machine = { pkgs, ... }: {
+        environment.systemPackages = [ vars-ng pkgs.sqlite ];
+        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
+      };
+      testScript = ''
+        start_all()
+        machine.succeed("mkdir -p /tmp/workdir_sqlite")
+        
+        # Generate with SQLite backend
+        machine.succeed("cd /tmp/workdir_sqlite && vars-ng --no-sandbox --configuration ${configSqlite} generate")
+        
+        # Verify database exists
+        machine.succeed("test -f /tmp/workdir_sqlite/vars.db")
+        
+        # Query database directly to verify contents
+        db_content_a = machine.succeed("sqlite3 /tmp/workdir_sqlite/vars.db \"SELECT CAST(content AS TEXT) FROM vars WHERE gen='a' AND file='a';\"").strip()
+        assert db_content_a == "a_run", f"Expected 'a_run', got '{db_content_a}'"
+        
+        db_content_b = machine.succeed("sqlite3 /tmp/workdir_sqlite/vars.db \"SELECT CAST(content AS TEXT) FROM vars WHERE gen='b' AND file='b';\"").strip()
+        assert db_content_b == "b_run", f"Expected 'b_run', got '{db_content_b}'"
+        
+        # Test Garbage Collection support in list script
+        gc_list = machine.succeed("sqlite3 -noheader -list /tmp/workdir_sqlite/vars.db \"SELECT gen || '/' || file FROM vars;\"").strip()
+        assert "a/a" in gc_list and "b/b" in gc_list, f"Expected a/a and b/b in list output, got: {gc_list}"
+      '';
+    };
+
+  ageBackendTest =
+    let
+      configAge = pkgs.writeText "config-age.nix" ''
+        { pkgs, ... }:
+        {
+          vars.backend-age.enable = true;
+          vars.backend-age.directory = "/tmp/workdir_age/encrypted";
+          vars.backend-age.vars = ["a" "b"];
+          # Use a deterministic key pair for testing (generate a valid one via age-keygen)
+          vars.backend-age.publicKeys = [ "age1l042ae7edptq2j7hyx0844la7ljgv442dx6m59rceu9suvm8rqxqpuuktk" ];
+          vars.backend-age.identity = "/tmp/workdir_age/key.txt";
+          vars.generators = {
+            a = { files.a = { }; script = "echo a_run > \"\$out\"/a"; };
+            b = { dependencies = [ "a" ]; files.b = { }; script = "echo b_run > \"\$out\"/b"; };
+          };
+        }
+      '';
+    in
+    pkgs.testers.runNixOSTest {
+      name = "vars-ng age backend";
+      nodes.machine = { pkgs, ... }: {
+        environment.systemPackages = [ vars-ng pkgs.age ];
+        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
+      };
+      testScript = ''
+        start_all()
+        machine.succeed("mkdir -p /tmp/workdir_age")
+        
+        # Write the corresponding private key
+        machine.succeed("echo 'AGE-SECRET-KEY-1HCJD5RS0MDD05CPAU4ZM7EAPC6LUZ44D43C7DGVXT5AGSDTCG24S79PK7Y' > /tmp/workdir_age/key.txt")
+        
+        # Generate with age backend
+        machine.succeed("cd /tmp/workdir_age && vars-ng --no-sandbox --configuration ${configAge} generate || (cat /tmp/age-error.log; exit 1)")
+        
+        # Verify files are created and look like age encrypted files
+        content_a = machine.succeed("cat /tmp/workdir_age/encrypted/a/a").strip()
+        assert "age-encryption.org" in content_a, "File a/a does not appear to be age encrypted"
+        
+        # Manually decrypt to verify contents
+        decrypted_a = machine.succeed("age -d -i /tmp/workdir_age/key.txt /tmp/workdir_age/encrypted/a/a").strip()
+        assert decrypted_a == "a_run", f"Expected 'a_run', got '{decrypted_a}'"
+        
+        decrypted_b = machine.succeed("age -d -i /tmp/workdir_age/key.txt /tmp/workdir_age/encrypted/b/b").strip()
+        assert decrypted_b == "b_run", f"Expected 'b_run', got '{decrypted_b}'"
+      '';
+    };
 }

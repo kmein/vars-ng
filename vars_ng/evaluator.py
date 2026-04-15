@@ -26,6 +26,8 @@ def evaluate_config(
     """Evaluates the given config.nix file and returns the vars configuration."""
     # Note: options.nix is now adjacent to this module instead of main.py
     backend_local_nix_path = Path(__file__).parent / "backend-local.nix"
+    backend_sqlite_nix_path = Path(__file__).parent / "backend-sqlite.nix"
+    backend_age_nix_path = Path(__file__).parent / "backend-age.nix"
     options_nix_path = Path(__file__).parent / "options.nix"
     config_nix = configuration_path.resolve().as_posix()  # canonicalize
 
@@ -39,6 +41,8 @@ let
       {{ _module.args.pkgs = pkgs; }}
       {options_nix_path}
       {backend_local_nix_path}
+      {backend_sqlite_nix_path}
+      {backend_age_nix_path}
       {config_nix}
     ];
   }};

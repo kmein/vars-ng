@@ -19,4 +19,6 @@ packages = ["vars_ng"]
 [tool.hatch.build.targets.wheel.force-include]
 "vars_ng/options.nix" = "vars_ng/options.nix"
 "vars_ng/backend-local.nix" = "vars_ng/backend-local.nix"
+"vars_ng/backend-sqlite.nix" = "vars_ng/backend-sqlite.nix"
+"vars_ng/backend-age.nix" = "vars_ng/backend-age.nix"
 
