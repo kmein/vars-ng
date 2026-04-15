@@ -1,4 +1,6 @@
 from typing import Dict, Any, List, Optional, TypedDict
+import subprocess
+import os
 
 
 class FileConfig(TypedDict):
@@ -33,6 +35,56 @@ class BackendConfig(TypedDict):
     delete: Optional[str]
     list: Optional[str]
     generators: set[str]
+
+
+class Backend:
+    def __init__(self, name: str, config: BackendConfig):
+        self.name = name
+        self.config = config
+
+    def get(self, gen_name: str, file_name: str, out_path: str) -> None:
+        subprocess.run(
+            ["bash", "-c", self.config["get"], "--", gen_name, file_name],
+            env={"out": out_path, "PATH": os.environ.get("PATH", "")},
+            check=True,
+            capture_output=True,
+        )
+
+    def set(self, gen_name: str, file_name: str, in_path: str) -> None:
+        subprocess.run(
+            ["bash", "-c", self.config["set"], "--", gen_name, file_name],
+            env={"in": in_path, "PATH": os.environ.get("PATH", "")},
+            check=True,
+            capture_output=True,
+        )
+
+    def exists(self, gen_name: str, file_name: str) -> bool:
+        result = subprocess.run(
+            ["bash", "-c", self.config["exists"], "--", gen_name, file_name],
+            capture_output=True,
+        )
+        return result.returncode == 0
+
+    def list(self) -> List[str]:
+        if not self.config.get("list"):
+            return []
+        result = subprocess.run(
+            ["bash", "-c", self.config["list"]],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return [line for line in result.stdout.strip().split("\n") if line]
+
+    def delete(self, gen_name: str, file_name: str) -> None:
+        if not self.config.get("delete"):
+            return
+        subprocess.run(
+            ["bash", "-c", self.config["delete"], "--", gen_name, file_name],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
 
 class VarsConfig(TypedDict):

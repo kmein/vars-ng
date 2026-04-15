@@ -7,11 +7,11 @@ from pathlib import Path
 from .evaluator import evaluate_config
 from .utils import get_execution_order, get_descendants
 from .execution import LocalRunner, SandboxRunner
-from .models import GeneratorConfig, BackendConfig
+from .models import GeneratorConfig, Backend
 
 
 def generator_needs_run(
-    gen: GeneratorConfig, backend: BackendConfig, rebuilt: set[str]
+    gen: GeneratorConfig, backend: Backend, rebuilt: set[str]
 ) -> bool:
     """Determines whether a generator needs to be run based on its dependencies and output files.
 
@@ -23,21 +23,7 @@ def generator_needs_run(
         return True
 
     for file_config in gen.get("files", {}).values():
-        try:
-            result = subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    backend["exists"],
-                    "--",
-                    gen["name"],
-                    file_config["name"],
-                ],
-                capture_output=True,
-            )
-            if result.returncode != 0:
-                return True
-        except Exception:
+        if not backend.exists(gen["name"], file_config["name"]):
             return True
     return False
 
@@ -45,7 +31,7 @@ def generator_needs_run(
 def handle_generate(args: argparse.Namespace) -> None:
     eval_result = evaluate_config(args.configuration, args.nixpkgs)
     generators = eval_result["generators"]
-    backends = eval_result["backends"]
+    backends = {k: Backend(k, v) for k, v in eval_result["backends"].items()}
     gen_to_backend = eval_result["gen_to_backend"]
 
     execution_order: list[str] = get_execution_order(generators)
@@ -116,7 +102,7 @@ def handle_regenerate(args: argparse.Namespace) -> None:
         with runner_cls(
             generators=generators,
             gen_to_backend=gen_to_backend,
-            backends=config["backends"],
+            backends={k: Backend(k, v) for k, v in config["backends"].items()},
             nixpkgs_path=args.nixpkgs,
         ) as runner:
             for var_name in get_execution_order(generators):
@@ -127,29 +113,23 @@ def handle_regenerate(args: argparse.Namespace) -> None:
 def handle_garbage_collect(args: argparse.Namespace) -> None:
     config = evaluate_config(args.configuration, args.nixpkgs)
     generators = config["generators"]
-    backends = config["backends"]
+    backends = {k: Backend(k, v) for k, v in config["backends"].items()}
 
     for backend_name, backend in backends.items():
-        if not backend.get("list") or not backend.get("delete"):
+        if not backend.config.get("list") or not backend.config.get("delete"):
             print(
                 f"Skipping garbage collection for backend '{backend_name}' (missing 'list' or 'delete' script)."
             )
             continue
 
         try:
-            result = subprocess.run(
-                ["bash", "-c", backend["list"]],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            lines = backend.list()
         except subprocess.CalledProcessError as e:
             print(
                 f"Error running 'list' script for backend '{backend_name}': {e.stderr}"
             )
             continue
 
-        lines = result.stdout.strip().split("\n")
         # Ensure we have pairs of gen/file
         found_pairs = set()
         for line in lines:
@@ -165,7 +145,7 @@ def handle_garbage_collect(args: argparse.Namespace) -> None:
 
         # Compute active pairs
         active_pairs = set()
-        for gen_name in backend["generators"]:
+        for gen_name in backend.config["generators"]:
             if gen_name in generators:
                 for file_name in generators[gen_name]["files"]:
                     active_pairs.add((gen_name, file_name))
@@ -185,12 +165,7 @@ def handle_garbage_collect(args: argparse.Namespace) -> None:
                     f"  -> Deleting from backend '{backend_name}': {gen_name}/{file_name}"
                 )
                 try:
-                    subprocess.run(
-                        ["bash", "-c", backend["delete"], "--", gen_name, file_name],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    )
+                    backend.delete(gen_name, file_name)
                 except subprocess.CalledProcessError as e:
                     print(f"Error deleting {gen_name}/{file_name}: {e.stderr}")
 

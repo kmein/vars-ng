@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
-from .models import GeneratorConfig, FileConfig, BackendConfig
+from .models import GeneratorConfig, FileConfig, Backend
 
 
 # Max request body the daemon will accept from a sandboxed script (per POST).
@@ -49,7 +49,7 @@ class UnixSocketHttpServer(socketserver.UnixStreamServer):
 def make_handler(
     generators: Dict[str, GeneratorConfig],
     gen_to_backend: Dict[str, str],
-    backends: Dict[str, BackendConfig],
+    backends: Dict[str, Backend],
     tokens: Dict[str, TokenGrant],
     tokens_lock: threading.Lock,
 ):
@@ -105,12 +105,7 @@ def make_handler(
                     {"out": tmp.name, "PATH": os.environ.get("PATH", "")},
                 )
                 try:
-                    subprocess.run(
-                        ["bash", "-c", backend["get"], "--", gen_name, file_name],
-                        env={"out": tmp.name, "PATH": os.environ.get("PATH", "")},
-                        check=True,
-                        capture_output=True,
-                    )
+                    backend.get(gen_name, file_name, tmp.name)
                 except subprocess.CalledProcessError as e:
                     self.send_error(
                         500,
@@ -164,12 +159,7 @@ def make_handler(
                         "running backend set with",
                         {"in": tmp.name, "PATH": os.environ.get("PATH", "")},
                     )
-                    subprocess.run(
-                        ["bash", "-c", backend["set"], "--", gen_name, file_name],
-                        env={"in": tmp.name, "PATH": os.environ.get("PATH", "")},
-                        check=True,
-                        capture_output=True,
-                    )
+                    backend.set(gen_name, file_name, tmp.name)
                 except subprocess.CalledProcessError as e:
                     self.send_error(
                         500,
@@ -198,7 +188,7 @@ class GeneratorRunner(abc.ABC):
         self,
         generators: Dict[str, GeneratorConfig],
         gen_to_backend: Dict[str, str],
-        backends: Dict[str, BackendConfig],
+        backends: Dict[str, Backend],
         nixpkgs_path: Optional[str],
     ):
         self.generators = generators
@@ -248,14 +238,7 @@ class LocalRunner(GeneratorRunner):
                         name = file_config["name"]
                         dest_path = dep_dir / name
                         try:
-                            subprocess.run(
-                                ["bash", "-c", backend["get"], "--", dep_name, name],
-                                env={
-                                    "out": str(dest_path),
-                                    "PATH": os.environ.get("PATH", ""),
-                                },
-                                check=True,
-                            )
+                            backend.get(dep_name, name, str(dest_path))
                         except subprocess.CalledProcessError:
                             print(
                                 f"Error fetching dependency {dep_name}/{name} using backend"
@@ -308,14 +291,7 @@ class LocalRunner(GeneratorRunner):
                                 print(f"Warning: Invalid mode '{mode_str}' for {name}")
 
                         try:
-                            subprocess.run(
-                                ["bash", "-c", backend["set"], "--", var_name, name],
-                                env={
-                                    "in": str(src_file),
-                                    "PATH": os.environ.get("PATH", ""),
-                                },
-                                check=True,
-                            )
+                            backend.set(var_name, name, str(src_file))
                         except subprocess.CalledProcessError:
                             print(
                                 f"Error setting output {var_name}/{name} using backend"
