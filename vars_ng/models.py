@@ -2,6 +2,29 @@ from typing import Dict, Any, List, Optional, TypedDict
 from dataclasses import dataclass
 import subprocess
 import os
+import hashlib
+from pathlib import Path
+
+
+def _is_approved(script: str) -> bool:
+    try:
+        xdg_cache = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+        cache_dir = Path(xdg_cache) / "vars-ng" / "approved_scripts"
+        script_hash = hashlib.sha256(script.encode("utf-8")).hexdigest()
+        return (cache_dir / script_hash).exists()
+    except OSError:
+        return False
+
+
+def _approve(script: str) -> None:
+    try:
+        xdg_cache = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+        cache_dir = Path(xdg_cache) / "vars-ng" / "approved_scripts"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        script_hash = hashlib.sha256(script.encode("utf-8")).hexdigest()
+        (cache_dir / script_hash).touch()
+    except OSError:
+        pass
 
 
 class FileConfig(TypedDict):
@@ -46,12 +69,13 @@ class Backend:
     def get(
         self, *, gen_name: str, file_name: str, out_path: str, assume_yes: bool = False
     ) -> None:
-        cmd = ["bash", "-c", self.config["get"], "--", gen_name, file_name]
-        if not assume_yes:
+        script = self.config["get"]
+        cmd = ["bash", "-c", script, "--", gen_name, file_name]
+        if not assume_yes and not _is_approved(script):
             print(f"\nAbout to run GET for {gen_name}/{file_name}:")
             print(f"  env: out={out_path}")
-            print(f"  script:")
-            for line in self.config["get"].strip().split('\n'):
+            print("  script:")
+            for line in script.strip().split("\n"):
                 print(f"    {line}")
             print(f"  args: {gen_name} {file_name}")
             while True:
@@ -61,6 +85,7 @@ class Backend:
                     print("Aborted.")
                     exit(1)
                 if resp == "y":
+                    _approve(script)
                     break
                 else:
                     print("Aborted.")
@@ -75,12 +100,13 @@ class Backend:
     def set(
         self, *, gen_name: str, file_name: str, in_path: str, assume_yes: bool = False
     ) -> None:
-        cmd = ["bash", "-c", self.config["set"], "--", gen_name, file_name]
-        if not assume_yes:
+        script = self.config["set"]
+        cmd = ["bash", "-c", script, "--", gen_name, file_name]
+        if not assume_yes and not _is_approved(script):
             print(f"\nAbout to run SET for {gen_name}/{file_name}:")
             print(f"  env: in={in_path}")
-            print(f"  script:")
-            for line in self.config["set"].strip().split('\n'):
+            print("  script:")
+            for line in script.strip().split("\n"):
                 print(f"    {line}")
             print(f"  args: {gen_name} {file_name}")
             while True:
@@ -90,6 +116,7 @@ class Backend:
                     print("Aborted.")
                     exit(1)
                 if resp == "y":
+                    _approve(script)
                     break
                 else:
                     print("Aborted.")
@@ -124,11 +151,12 @@ class Backend:
     ) -> None:
         if not self.config.get("delete"):
             return
-        cmd = ["bash", "-c", self.config["delete"], "--", gen_name, file_name]
-        if not assume_yes:
+        script = self.config["delete"]
+        cmd = ["bash", "-c", script, "--", gen_name, file_name]
+        if not assume_yes and not _is_approved(script):
             print(f"\nAbout to run DELETE for {gen_name}/{file_name}:")
-            print(f"  script:")
-            for line in self.config["delete"].strip().split('\n'):
+            print("  script:")
+            for line in script.strip().split("\n"):
                 print(f"    {line}")
             print(f"  args: {gen_name} {file_name}")
             while True:
@@ -138,6 +166,7 @@ class Backend:
                     print("Aborted.")
                     exit(1)
                 if resp == "y":
+                    _approve(script)
                     break
                 else:
                     print("Aborted.")
