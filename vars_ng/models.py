@@ -30,6 +30,8 @@ class BackendConfig(TypedDict):
     get: str
     set: str
     exists: str
+    delete: Optional[str]
+    list: Optional[str]
     generators: set[str]
 
 

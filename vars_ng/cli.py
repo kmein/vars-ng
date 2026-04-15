@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from .evaluator import evaluate_config
-from .utils import get_execution_order, get_file_dest_path, get_descendants
+from .utils import get_execution_order, get_descendants
 from .execution import LocalRunner, SandboxRunner
 from .models import GeneratorConfig, BackendConfig
 
@@ -19,10 +19,10 @@ def generator_needs_run(
     - Any of its dependencies were rebuilt during this run (i.e., are in the `rebuilt` set).
     - Any of its output files are missing from the backend.
     """
-    if any(dep in rebuilt for dep in gen["dependencies"]):
+    if any(dep in rebuilt for dep in gen.get("dependencies", [])):
         return True
 
-    for file_config in gen["files"].values():
+    for file_config in gen.get("files", {}).values():
         try:
             result = subprocess.run(
                 [
@@ -46,12 +46,7 @@ def handle_generate(args: argparse.Namespace) -> None:
     eval_result = evaluate_config(args.configuration, args.nixpkgs)
     generators = eval_result["generators"]
     backends = eval_result["backends"]
-
-    # Map generator names to their backend
-    gen_to_backend = {}
-    for be_name, backend in backends.items():
-        for gen_name in backend["generators"]:
-            gen_to_backend[gen_name] = backend
+    gen_to_backend = eval_result["gen_to_backend"]
 
     execution_order: list[str] = get_execution_order(generators)
 
@@ -63,10 +58,16 @@ def handle_generate(args: argparse.Namespace) -> None:
     # Use sandbox runner by default, but allow disabling it for testing or special environments
     runner_cls = LocalRunner if args.no_sandbox else SandboxRunner
 
-    with runner_cls(generators, gen_to_backend, args.nixpkgs) as runner:
+    with runner_cls(
+        generators=generators,
+        gen_to_backend=gen_to_backend,
+        backends=backends,
+        nixpkgs_path=args.nixpkgs,
+    ) as runner:
         for var_name in execution_order:
             var = generators[var_name]
-            backend = gen_to_backend[var_name]
+            backend_name = gen_to_backend[var_name]
+            backend = backends[backend_name]
             print(f"- {var_name}")
 
             if not generator_needs_run(var, backend, rebuilt):
@@ -87,7 +88,9 @@ def handle_generate(args: argparse.Namespace) -> None:
 
 
 def handle_regenerate(args: argparse.Namespace) -> None:
-    generators = evaluate_config(args.configuration, args.nixpkgs)
+    config = evaluate_config(args.configuration, args.nixpkgs)
+    generators = config["generators"]
+    gen_to_backend = config["gen_to_backend"]
 
     if args.target not in generators:
         print(f"Error: Target generator '{args.target}' not found in configuration.")
@@ -101,20 +104,95 @@ def handle_regenerate(args: argparse.Namespace) -> None:
     for gen_name in to_regenerate:
         gen = generators[gen_name]
         for file_config in gen["files"].values():
-            path = get_file_dest_path(args.output_dir, file_config)
-            if path.exists():
-                if args.dry_run:
-                    print(f"  -> Would delete: {path}")
-                else:
-                    print(f"  -> Deleting: {path}")
-                    path.unlink()
+            if args.dry_run:
+                print(
+                    f"  -> [DRY-RUN] Would update: {file_config['name']} for {gen_name}"
+                )
 
-    # Fall back to normal generate flow to rebuild the missing files
-    handle_generate(args)
+    # For targeted regeneration, we run generate with a target subset if supported.
+    # Currently, `handle_generate` doesn't take targets, so we instantiate the runner directly.
+    if not args.dry_run:
+        runner_cls = SandboxRunner if not args.no_sandbox else LocalRunner
+        with runner_cls(
+            generators=generators,
+            gen_to_backend=gen_to_backend,
+            backends=config["backends"],
+            nixpkgs_path=args.nixpkgs,
+        ) as runner:
+            for var_name in get_execution_order(generators):
+                if var_name in to_regenerate:
+                    runner.generate(var_name, generators[var_name])
 
 
 def handle_garbage_collect(args: argparse.Namespace) -> None:
-    print("Garbage collection is currently unsupported when using pluggable backends.")
+    config = evaluate_config(args.configuration, args.nixpkgs)
+    generators = config["generators"]
+    backends = config["backends"]
+
+    for backend_name, backend in backends.items():
+        if not backend.get("list") or not backend.get("delete"):
+            print(
+                f"Skipping garbage collection for backend '{backend_name}' (missing 'list' or 'delete' script)."
+            )
+            continue
+
+        try:
+            result = subprocess.run(
+                ["bash", "-c", backend["list"]],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            print(
+                f"Error running 'list' script for backend '{backend_name}': {e.stderr}"
+            )
+            continue
+
+        lines = result.stdout.strip().split("\n")
+        # Ensure we have pairs of gen/file
+        found_pairs = set()
+        for line in lines:
+            if not line:
+                continue
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                found_pairs.add((parts[0], parts[1]))
+            else:
+                print(
+                    f"Warning: ignoring malformed output from list script in backend '{backend_name}': {line}"
+                )
+
+        # Compute active pairs
+        active_pairs = set()
+        for gen_name in backend["generators"]:
+            if gen_name in generators:
+                for file_name in generators[gen_name]["files"]:
+                    active_pairs.add((gen_name, file_name))
+
+        stale_pairs = found_pairs - active_pairs
+        if not stale_pairs:
+            print(f"Backend '{backend_name}': Everything is clean.")
+            continue
+
+        for gen_name, file_name in sorted(stale_pairs):
+            if args.dry_run:
+                print(
+                    f"  -> [DRY-RUN] Would delete from backend '{backend_name}': {gen_name}/{file_name}"
+                )
+            else:
+                print(
+                    f"  -> Deleting from backend '{backend_name}': {gen_name}/{file_name}"
+                )
+                try:
+                    subprocess.run(
+                        ["bash", "-c", backend["delete"], "--", gen_name, file_name],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                except subprocess.CalledProcessError as e:
+                    print(f"Error deleting {gen_name}/{file_name}: {e.stderr}")
 
 
 def handle_evaluate(args: argparse.Namespace) -> None:
@@ -123,7 +201,16 @@ def handle_evaluate(args: argparse.Namespace) -> None:
     # Check for cycles. This will raise an error if a cycle is detected.
     get_execution_order(data["generators"])
 
-    print(json.dumps(data, indent=2))
+    print(
+        json.dumps(
+            {
+                "generators": data["generators"],
+                "gen_to_backend": data["gen_to_backend"],
+                "backends": data["backends"],
+            },
+            indent=2,
+        )
+    )
 
 
 def main() -> None:

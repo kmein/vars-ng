@@ -50,7 +50,16 @@ in
 """
 
     result = nix_instantiate(nix_expr)
-    # Convert generators to a set for each backend
-    for backend in result.get("backends", {}).values():
-        backend["generators"] = set(backend.get("generators", {}).keys())
+
+    # Process backends and build gen_to_backend mapping
+    gen_to_backend = {}
+    backends = result.get("backends", {})
+    for backend_name, backend_config in backends.items():
+        gen_keys = list(backend_config.get("generators", {}).keys())
+        for gen in gen_keys:
+            gen_to_backend[gen] = backend_name
+        backend_config["generators"] = set(gen_keys)
+
+    result["gen_to_backend"] = gen_to_backend
+
     return result

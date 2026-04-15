@@ -48,7 +48,8 @@ class UnixSocketHttpServer(socketserver.UnixStreamServer):
 
 def make_handler(
     generators: Dict[str, GeneratorConfig],
-    gen_to_backend: Dict[str, BackendConfig],
+    gen_to_backend: Dict[str, str],
+    backends: Dict[str, BackendConfig],
     tokens: Dict[str, TokenGrant],
     tokens_lock: threading.Lock,
 ):
@@ -72,6 +73,7 @@ def make_handler(
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, format, *args):
+            print(self, format, args)
             pass  # Suppress default stderr access log
 
         def _get_file_config(self, gen_name: str, file_name: str) -> FileConfig:
@@ -94,13 +96,18 @@ def make_handler(
                 self.send_error(e.code, e.message)
                 return
 
-            backend = gen_to_backend[gen_name]
+            backend_name = gen_to_backend[gen_name]
+            backend = backends[backend_name]
 
             with tempfile.NamedTemporaryFile() as tmp:
+                print(
+                    "running backend get with",
+                    {"out": tmp.name, "PATH": os.environ.get("PATH", "")},
+                )
                 try:
                     subprocess.run(
                         ["bash", "-c", backend["get"], "--", gen_name, file_name],
-                        env={"out": tmp.name},
+                        env={"out": tmp.name, "PATH": os.environ.get("PATH", "")},
                         check=True,
                         capture_output=True,
                     )
@@ -137,16 +144,29 @@ def make_handler(
                 return
             post_data = self.rfile.read(content_length)
 
-            backend = gen_to_backend[gen_name]
+            backend_name = gen_to_backend[gen_name]
+            backend = backends[backend_name]
 
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 try:
                     tmp.write(post_data)
                     tmp.close()
 
+                    file_config = self._get_file_config(gen_name, file_name)
+                    mode_str = file_config["mode"]
+                    if mode_str:
+                        try:
+                            os.chmod(tmp.name, int(mode_str, 8))
+                        except ValueError:
+                            pass
+
+                    print(
+                        "running backend set with",
+                        {"in": tmp.name, "PATH": os.environ.get("PATH", "")},
+                    )
                     subprocess.run(
                         ["bash", "-c", backend["set"], "--", gen_name, file_name],
-                        env={"in": tmp.name},
+                        env={"in": tmp.name, "PATH": os.environ.get("PATH", "")},
                         check=True,
                         capture_output=True,
                     )
@@ -177,11 +197,13 @@ class GeneratorRunner(abc.ABC):
     def __init__(
         self,
         generators: Dict[str, GeneratorConfig],
-        gen_to_backend: Dict[str, BackendConfig],
+        gen_to_backend: Dict[str, str],
+        backends: Dict[str, BackendConfig],
         nixpkgs_path: Optional[str],
     ):
         self.generators = generators
         self.gen_to_backend = gen_to_backend
+        self.backends = backends
         self.nixpkgs_path = nixpkgs_path
 
     def __enter__(self):
@@ -220,14 +242,18 @@ class LocalRunner(GeneratorRunner):
                     dep_gen = self.generators[dep_name]
                     dep_dir = in_dir / dep_name
                     dep_dir.mkdir(exist_ok=True)
-                    backend = self.gen_to_backend[dep_name]
+                    backend_name = self.gen_to_backend[dep_name]
+                    backend = self.backends[backend_name]
                     for file_config in dep_gen["files"].values():
                         name = file_config["name"]
                         dest_path = dep_dir / name
                         try:
                             subprocess.run(
                                 ["bash", "-c", backend["get"], "--", dep_name, name],
-                                env={"out": str(dest_path)},
+                                env={
+                                    "out": str(dest_path),
+                                    "PATH": os.environ.get("PATH", ""),
+                                },
                                 check=True,
                             )
                         except subprocess.CalledProcessError:
@@ -244,8 +270,12 @@ class LocalRunner(GeneratorRunner):
                 # Prepare PATH with runtimeInputs
                 runtime_inputs = var["runtimeInputs"]
                 bin_paths = [str(Path(p) / "bin") for p in runtime_inputs]
-                if bin_paths:
-                    env["PATH"] = ":".join(bin_paths) + ":" + env.get("PATH", "")
+                # Include host PATH so bash etc. are found
+                env["PATH"] = (
+                    ":".join(bin_paths)
+                    + ":"
+                    + env.get("PATH", os.environ.get("PATH", ""))
+                )
 
                 # Write and execute script
                 script_content = var["script"]
@@ -264,7 +294,8 @@ class LocalRunner(GeneratorRunner):
                     exit(1)
 
                 # Move generated files to destination
-                backend = self.gen_to_backend[var_name]
+                backend_name = self.gen_to_backend[var_name]
+                backend = self.backends[backend_name]
                 for file_config in var["files"].values():
                     name = file_config["name"]
                     src_file = out_dir / name
@@ -279,7 +310,10 @@ class LocalRunner(GeneratorRunner):
                         try:
                             subprocess.run(
                                 ["bash", "-c", backend["set"], "--", var_name, name],
-                                env={"in": str(src_file)},
+                                env={
+                                    "in": str(src_file),
+                                    "PATH": os.environ.get("PATH", ""),
+                                },
                                 check=True,
                             )
                         except subprocess.CalledProcessError:
@@ -313,7 +347,11 @@ class SandboxRunner(GeneratorRunner):
         self.server = UnixSocketHttpServer(
             str(self.socket_path),
             make_handler(
-                self.generators, self.gen_to_backend, self.tokens, self.tokens_lock
+                self.generators,
+                self.gen_to_backend,
+                self.backends,
+                self.tokens,
+                self.tokens_lock,
             ),
         )
         # Socket must be reachable by the nix build user, which is not us.

@@ -5,6 +5,13 @@
   ...
 }:
 {
+  options.assertions = lib.mkOption {
+    type = lib.types.listOf lib.types.unspecified;
+    internal = true;
+    default = [ ];
+    description = "Dummy assertions option to satisfy evalModules";
+  };
+
   options.vars = {
     settings = {
       fileModule = lib.mkOption {
@@ -57,6 +64,25 @@
                 Should exit with 0 if it exists, and non-zero otherwise.
               '';
               default = "";
+            };
+            delete = lib.mkOption {
+              type = lib.types.nullOr lib.types.lines;
+              description = ''
+                A script snippet to delete a generated file.
+                Takes arguments: $1=generator_name, $2=file_name.
+                Required if this backend is to support garbage collection.
+              '';
+              default = null;
+            };
+            list = lib.mkOption {
+              type = lib.types.nullOr lib.types.lines;
+              description = ''
+                A script snippet to list all files managed by this backend.
+                Should output space-separated or newline-separated pairs of:
+                generator_name file_name
+                Required if this backend is to support garbage collection.
+              '';
+              default = null;
             };
             generators = lib.mkOption {
               type = lib.types.attrsOf (lib.types.submodule { });
