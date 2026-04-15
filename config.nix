@@ -1,6 +1,6 @@
 { lib, ... }:
 {
-  var.backend-local = {
+  vars.backend-local = {
     enable = true;
     directory = "/tmp/vars";
     vars = [

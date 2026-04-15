@@ -49,8 +49,11 @@ class Backend:
         cmd = ["bash", "-c", self.config["get"], "--", gen_name, file_name]
         if not assume_yes:
             print(f"\nAbout to run GET for {gen_name}/{file_name}:")
-            print(f"  Command: {' '.join(cmd)}")
             print(f"  env: out={out_path}")
+            print(f"  script:")
+            for line in self.config["get"].strip().split('\n'):
+                print(f"    {line}")
+            print(f"  args: {gen_name} {file_name}")
             while True:
                 try:
                     resp = input("Proceed? [y/N]: ").strip().lower()
@@ -75,8 +78,11 @@ class Backend:
         cmd = ["bash", "-c", self.config["set"], "--", gen_name, file_name]
         if not assume_yes:
             print(f"\nAbout to run SET for {gen_name}/{file_name}:")
-            print(f"  Command: {' '.join(cmd)}")
             print(f"  env: in={in_path}")
+            print(f"  script:")
+            for line in self.config["set"].strip().split('\n'):
+                print(f"    {line}")
+            print(f"  args: {gen_name} {file_name}")
             while True:
                 try:
                     resp = input("Proceed? [y/N]: ").strip().lower()
@@ -121,7 +127,10 @@ class Backend:
         cmd = ["bash", "-c", self.config["delete"], "--", gen_name, file_name]
         if not assume_yes:
             print(f"\nAbout to run DELETE for {gen_name}/{file_name}:")
-            print(f"  Command: {' '.join(cmd)}")
+            print(f"  script:")
+            for line in self.config["delete"].strip().split('\n'):
+                print(f"    {line}")
+            print(f"  args: {gen_name} {file_name}")
             while True:
                 try:
                     resp = input("Proceed? [y/N]: ").strip().lower()
