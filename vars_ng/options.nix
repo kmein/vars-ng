@@ -250,7 +250,7 @@
   };
 
     config = {
-      assertions =
+      vars.assertions =
         let
           allGenNames = builtins.attrNames config.vars.generators;
 

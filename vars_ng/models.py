@@ -24,12 +24,14 @@ class GeneratorConfig(TypedDict):
     runtimeInputs: List[str]
     script: str
 
+
 class BackendConfig(TypedDict):
     name: str
     get: str
     set: str
     exists: str
     generators: set[str]
+
 
 class VarsConfig(TypedDict):
     generators: Dict[str, GeneratorConfig]

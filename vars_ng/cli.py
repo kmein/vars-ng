@@ -25,7 +25,14 @@ def generator_needs_run(
     for file_config in gen["files"].values():
         try:
             result = subprocess.run(
-                ["bash", "-c", backend["exists"], "--", gen["name"], file_config["name"]],
+                [
+                    "bash",
+                    "-c",
+                    backend["exists"],
+                    "--",
+                    gen["name"],
+                    file_config["name"],
+                ],
                 capture_output=True,
             )
             if result.returncode != 0:
@@ -39,7 +46,7 @@ def handle_generate(args: argparse.Namespace) -> None:
     eval_result = evaluate_config(args.configuration, args.nixpkgs)
     generators = eval_result["generators"]
     backends = eval_result["backends"]
-    
+
     # Map generator names to their backend
     gen_to_backend = {}
     for be_name, backend in backends.items():
@@ -72,8 +79,9 @@ def handle_generate(args: argparse.Namespace) -> None:
             rebuilt.add(var_name)
             if args.dry_run:
                 for file_config in var["files"].values():
-                    print(f"Would have created file: {file_config['name']} for {var_name}")
-                    print(f"  -> Would create/update: {path}")
+                    print(
+                        f"  -> Would create/update: {file_config['name']} for {var_name}"
+                    )
             else:
                 runner.generate(var_name, var)
 

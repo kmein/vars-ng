@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
 from .models import GeneratorConfig, FileConfig, BackendConfig
-from .utils import get_file_dest_path
 
 
 # Max request body the daemon will accept from a sandboxed script (per POST).
@@ -90,13 +89,13 @@ def make_handler(
                 gen_name, file_name = _parse_path(self.path)
                 if (gen_name, file_name) not in grant.reads:
                     raise HttpError(403, "Read not permitted for this token")
-                file_config = self._get_file_config(gen_name, file_name)
+                _ = self._get_file_config(gen_name, file_name)
             except HttpError as e:
                 self.send_error(e.code, e.message)
                 return
 
             backend = gen_to_backend[gen_name]
-            
+
             with tempfile.NamedTemporaryFile() as tmp:
                 try:
                     subprocess.run(
@@ -106,15 +105,18 @@ def make_handler(
                         capture_output=True,
                     )
                 except subprocess.CalledProcessError as e:
-                    self.send_error(500, f"Backend get failed: {e.stderr.decode() if e.stderr else 'unknown'}")
+                    self.send_error(
+                        500,
+                        f"Backend get failed: {e.stderr.decode() if e.stderr else 'unknown'}",
+                    )
                     return
-                
+
                 size = os.path.getsize(tmp.name)
                 self.send_response(200)
                 self.send_header("Content-type", "application/octet-stream")
                 self.send_header("Content-Length", str(size))
                 self.end_headers()
-                
+
                 with open(tmp.name, "rb") as f:
                     shutil.copyfileobj(f, self.wfile)
 
@@ -124,7 +126,7 @@ def make_handler(
                 gen_name, file_name = _parse_path(self.path)
                 if (gen_name, file_name) not in grant.writes:
                     raise HttpError(403, "Write not permitted for this token")
-                file_config = self._get_file_config(gen_name, file_name)
+                _ = self._get_file_config(gen_name, file_name)
             except HttpError as e:
                 self.send_error(e.code, e.message)
                 return
@@ -149,7 +151,10 @@ def make_handler(
                         capture_output=True,
                     )
                 except subprocess.CalledProcessError as e:
-                    self.send_error(500, f"Backend set failed: {e.stderr.decode() if e.stderr else 'unknown'}")
+                    self.send_error(
+                        500,
+                        f"Backend set failed: {e.stderr.decode() if e.stderr else 'unknown'}",
+                    )
                     return
                 finally:
                     if os.path.exists(tmp.name):
@@ -226,7 +231,9 @@ class LocalRunner(GeneratorRunner):
                                 check=True,
                             )
                         except subprocess.CalledProcessError:
-                            print(f"Error fetching dependency {dep_name}/{name} using backend")
+                            print(
+                                f"Error fetching dependency {dep_name}/{name} using backend"
+                            )
                             exit(1)
 
                 # Prepare environment
@@ -276,7 +283,9 @@ class LocalRunner(GeneratorRunner):
                                 check=True,
                             )
                         except subprocess.CalledProcessError:
-                            print(f"Error setting output {var_name}/{name} using backend")
+                            print(
+                                f"Error setting output {var_name}/{name} using backend"
+                            )
                             exit(1)
         finally:
             os.umask(old_umask)

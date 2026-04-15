@@ -1,8 +1,10 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Dict, Optional, Any
-from .models import GeneratorConfig
+from typing import Optional, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models import VarsConfig
 
 
 def nix_instantiate(expr: str) -> Any:
@@ -46,8 +48,7 @@ in
   backends = eval.config.vars.backends;
 }}
 """
-    from .models import VarsConfig
-    
+
     result = nix_instantiate(nix_expr)
     # Convert generators to a set for each backend
     for backend in result.get("backends", {}).values():
