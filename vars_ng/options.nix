@@ -20,6 +20,57 @@
         default = { };
       };
     };
+    backends = lib.mkOption {
+      description = ''
+        A set of backends that handle storing and retrieving generated files.
+      '';
+      default = { };
+      type = lib.types.attrsOf (
+        lib.types.submodule ({ name, config, ... }: {
+          options = {
+            name = lib.mkOption {
+              type = lib.types.str;
+              description = "The name of the backend.";
+              readOnly = true;
+              default = name;
+            };
+            get = lib.mkOption {
+              type = lib.types.lines;
+              description = ''
+                A script snippet to retrieve a file. 
+                Should take arguments or environment variables pointing to the required metadata.
+              '';
+              default = "";
+            };
+            set = lib.mkOption {
+              type = lib.types.lines;
+              description = ''
+                A script snippet to store a generated file.
+                Should take arguments or environment variables pointing to the output file and its metadata.
+              '';
+              default = "";
+            };
+            exists = lib.mkOption {
+              type = lib.types.lines;
+              description = ''
+                A script snippet to check if a generated file exists in this backend.
+                Should exit with 0 if it exists, and non-zero otherwise.
+              '';
+              default = "";
+            };
+            generators = lib.mkOption {
+              type = lib.types.attrsOf (lib.types.submodule { });
+              description = ''
+                Generators handled by this backend.
+                Keys are generator names. The value is an empty attrset for now.
+              '';
+              default = { };
+            };
+          };
+        })
+      );
+    };
+
     generators = lib.mkOption {
       description = ''
         A set of generators that can be used to generate files.
@@ -197,4 +248,26 @@
       );
     };
   };
+
+    config = {
+      assertions =
+        let
+          allGenNames = builtins.attrNames config.vars.generators;
+
+          backendsForGen = genName:
+            builtins.filter (
+              backendName: config.vars.backends.${backendName}.generators ? ${genName}
+            ) (builtins.attrNames config.vars.backends);
+
+          validateGen = genName:
+            let
+              backends = backendsForGen genName;
+            in
+            {
+              assertion = builtins.length backends == 1;
+              message = "Generator '${genName}' must have exactly one backend assigned. Found ${toString (builtins.length backends)}.";
+            };
+        in
+        map validateGen allGenNames;
+    };
 }
