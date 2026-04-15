@@ -49,7 +49,7 @@ class UnixSocketHttpServer(socketserver.UnixStreamServer):
 
 def make_handler(
     generators: Dict[str, GeneratorConfig],
-    output_dir: str,
+    gen_to_backend: Dict[str, BackendConfig],
     tokens: Dict[str, TokenGrant],
     tokens_lock: threading.Lock,
 ):
@@ -304,7 +304,7 @@ class SandboxRunner(GeneratorRunner):
         self.server = UnixSocketHttpServer(
             str(self.socket_path),
             make_handler(
-                self.generators, self.output_dir, self.tokens, self.tokens_lock
+                self.generators, self.gen_to_backend, self.tokens, self.tokens_lock
             ),
         )
         # Socket must be reachable by the nix build user, which is not us.
