@@ -8,33 +8,50 @@
   outputs =
     { self, nixpkgs }:
     let
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-      python = pkgs.python3.withPackages (ps: with ps; [ ty ruff ]);
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      forAllSystems = nixpkgs.lib.genAttrs systems;
 
-      vars-ng = pkgs.python3Packages.buildPythonApplication {
-        pname = "vars-ng";
-        version = "0.1.0";
-        src = ./.;
-        pyproject = true;
-        build-system = [ pkgs.python3Packages.hatchling ];
-        nativeCheckInputs = [ pkgs.ty pkgs.ruff ];
-        
-        checkPhase = ''
-          runHook preCheck
-          ruff check .
-          ruff format --check .
-          runHook postCheck
-        '';
+      perSystem = system: rec {
+        pkgs = nixpkgs.legacyPackages.${system};
+        python = pkgs.python3.withPackages (
+          ps: with ps; [
+            ty
+            ruff
+          ]
+        );
+        vars-ng = pkgs.python3Packages.buildPythonApplication {
+          pname = "vars-ng";
+          version = "0.1.0";
+          src = ./.;
+          pyproject = true;
+          build-system = [ pkgs.python3Packages.hatchling ];
+          nativeCheckInputs = [
+            pkgs.ty
+            pkgs.ruff
+          ];
+
+          checkPhase = ''
+            runHook preCheck
+            ruff check .
+            ruff format --check .
+            runHook postCheck
+          '';
+        };
       };
+      each = forAllSystems perSystem;
     in
     {
-      packages.${system}.default = vars-ng;
+      packages = forAllSystems (s: {
+        default = each.${s}.vars-ng;
+      });
 
-      checks.${system} = import ./tests.nix { inherit pkgs vars-ng; };
+      checks = forAllSystems (s: import ./tests.nix { inherit (each.${s}) pkgs vars-ng; });
 
-      devShells.${system}.default = pkgs.mkShell {
-        buildInputs = [ python ];
-      };
+      devShells = forAllSystems (s: {
+        default = each.${s}.pkgs.mkShell { buildInputs = [ each.${s}.python ]; };
+      });
     };
 }
