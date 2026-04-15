@@ -217,7 +217,7 @@ class LocalRunner(GeneratorRunner):
                 runtime_inputs = var["runtimeInputs"]
                 bin_paths = [str(Path(p) / "bin") for p in runtime_inputs]
                 if bin_paths:
-                    env["PATH"] = ":".join(bin_paths)
+                    env["PATH"] = ":".join(bin_paths) + ":" + env.get("PATH", "")
 
                 # Write and execute script
                 script_content = var["script"]
