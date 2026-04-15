@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
 from .models import GeneratorConfig, FileConfig, Backend
+from .utils import VarsError
 
 
 # Max request body the daemon will accept from a sandboxed script (per POST).
@@ -74,8 +75,7 @@ def make_handler(
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, format, *args):
-            print(self, format, args)
-            pass  # Suppress default stderr access log
+            pass
 
         def _get_file_config(self, gen_name: str, file_name: str) -> FileConfig:
             var = generators.get(gen_name)
@@ -258,10 +258,9 @@ class LocalRunner(GeneratorRunner):
                                 assume_yes=assume_yes,
                             )
                         except subprocess.CalledProcessError:
-                            print(
+                            raise VarsError(
                                 f"Error fetching dependency {dep_name}/{name} using backend"
                             )
-                            exit(1)
 
                 # Prepare environment
                 env = os.environ.copy()
@@ -291,8 +290,7 @@ class LocalRunner(GeneratorRunner):
                         [str(script_path)], env=env, check=True, cwd=str(temp_dir)
                     )
                 except subprocess.CalledProcessError:
-                    print(f"Error executing script for generator {var_name}")
-                    exit(1)
+                    raise VarsError(f"Error executing script for generator {var_name}")
 
                 # Move generated files to destination
                 backend_name = self.gen_to_backend[var_name]
@@ -316,10 +314,9 @@ class LocalRunner(GeneratorRunner):
                                 assume_yes=assume_yes,
                             )
                         except subprocess.CalledProcessError:
-                            print(
+                            raise VarsError(
                                 f"Error setting output {var_name}/{name} using backend"
                             )
-                            exit(1)
         finally:
             os.umask(old_umask)
 
@@ -351,10 +348,7 @@ class SandboxRunner(GeneratorRunner):
                 self.backends,
                 self.tokens,
                 self.tokens_lock,
-                # Passed via thread state or instance variable?
-                # Actually, SandboxRunner.__enter__ doesn't know assume_yes.
-                # We need to pass it when we make the server or pass it to handler?
-                getattr(self, "assume_yes", False),
+                self.assume_yes,
             ),
         )
         # Socket must be reachable by the nix build user, which is not us.
@@ -486,5 +480,4 @@ class SandboxRunner(GeneratorRunner):
             try:
                 subprocess.run(cmd, env=env, check=True)
             except subprocess.CalledProcessError:
-                print(f"Error executing script for generator {var_name}")
-                exit(1)
+                raise VarsError(f"Error executing script for generator {var_name}")

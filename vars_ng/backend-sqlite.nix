@@ -42,7 +42,7 @@ in
       list = ''
         if [ -f ${cfg.database} ]; then
           ${initDb}
-          ${sqlite3} -noheader -list ${cfg.database} "SELECT gen || '/' || file FROM vars;"
+          ${sqlite3} -noheader -list ${cfg.database} "SELECT gen || ' ' || file FROM vars;"
         fi
       '';
       generators = lib.genAttrs cfg.vars (_: { });

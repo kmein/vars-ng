@@ -80,8 +80,7 @@ def handle_regenerate(args: argparse.Namespace) -> None:
     gen_to_backend = config.gen_to_backend
 
     if args.target not in generators:
-        print(f"Error: Target generator '{args.target}' not found in configuration.")
-        exit(1)
+        raise VarsError(f"Target generator '{args.target}' not found in configuration.")
 
     to_regenerate = get_descendants(args.target, generators)
     to_regenerate.add(args.target)
@@ -99,7 +98,7 @@ def handle_regenerate(args: argparse.Namespace) -> None:
     # For targeted regeneration, we run generate with a target subset if supported.
     # Currently, `handle_generate` doesn't take targets, so we instantiate the runner directly.
     if not args.dry_run:
-        runner_cls = SandboxRunner if not args.no_sandbox else LocalRunner
+        runner_cls = LocalRunner if args.no_sandbox else SandboxRunner
         with runner_cls(
             generators=generators,
             gen_to_backend=gen_to_backend,
