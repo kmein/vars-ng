@@ -206,7 +206,15 @@
     let
       configAttrs = pkgs.writeText "config-attrs.nix" ''
         { pkgs, ... }:
+        { pkgs, ... }:
         {
+
+          vars.backends.local = {
+            get = "cp /tmp/workdir4/output/\$1/\$2 \$out";
+            set = "mkdir -p /tmp/workdir4/output/\$1 && cp \$in /tmp/workdir4/output/\$1/\$2";
+            exists = "test -e /tmp/workdir4/output/\$1/\$2";
+            generators = pkgs.lib.genAttrs ["ssh_key"] (_: { });
+          };
           vars.generators = {
             ssh_key = {
               runtimeInputs = [ pkgs.openssh ];

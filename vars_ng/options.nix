@@ -249,25 +249,25 @@
     };
   };
 
-    config = {
-      vars.assertions =
-        let
-          allGenNames = builtins.attrNames config.vars.generators;
+  config = {
+    assertions =
+      let
+        allGenNames = builtins.attrNames config.vars.generators;
 
-          backendsForGen = genName:
-            builtins.filter (
-              backendName: config.vars.backends.${backendName}.generators ? ${genName}
-            ) (builtins.attrNames config.vars.backends);
+        backendsForGen = genName:
+          builtins.filter (
+            backendName: config.vars.backends.${backendName}.generators ? ${genName}
+          ) (builtins.attrNames config.vars.backends);
 
-          validateGen = genName:
-            let
-              backends = backendsForGen genName;
-            in
-            {
-              assertion = builtins.length backends == 1;
-              message = "Generator '${genName}' must have exactly one backend assigned. Found ${toString (builtins.length backends)}.";
-            };
-        in
-        map validateGen allGenNames;
-    };
+        validateGen = genName:
+          let
+            backends = backendsForGen genName;
+          in
+          {
+            assertion = builtins.length backends == 1;
+            message = "Generator '${genName}' must have exactly one backend assigned. Found ${toString (builtins.length backends)}.";
+          };
+      in
+      map validateGen allGenNames;
+  };
 }
