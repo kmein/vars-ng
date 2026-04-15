@@ -1,4 +1,20 @@
 {
+  vars.backends.local = {
+    get = ''
+      cp /var/lib/vars/$1/$2 $out/
+    '';
+    set = ''
+      mkdir -p /var/lib/vars/$1
+      cp $in/$2 /var/lib/vars/$1/$2
+    '';
+    exists = ''
+      test -e /var/lib/vars/$1/$2
+    '';
+    generators.simple = { };
+    generators.a = { };
+    generators.b = { };
+  };
+
   vars.generators = {
     simple = {
       files.simple = { };
