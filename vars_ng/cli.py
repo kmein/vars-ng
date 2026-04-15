@@ -23,7 +23,7 @@ def generator_needs_run(
         return True
 
     for file_config in gen.get("files", {}).values():
-        if not backend.exists(gen["name"], file_config["name"]):
+        if not backend.exists(gen_name=gen["name"], file_name=file_config["name"]):
             return True
     return False
 
@@ -165,7 +165,7 @@ def handle_garbage_collect(args: argparse.Namespace) -> None:
                     f"  -> Deleting from backend '{backend_name}': {gen_name}/{file_name}"
                 )
                 try:
-                    backend.delete(gen_name, file_name)
+                    backend.delete(gen_name=gen_name, file_name=file_name)
                 except subprocess.CalledProcessError as e:
                     print(f"Error deleting {gen_name}/{file_name}: {e.stderr}")
 

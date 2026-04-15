@@ -105,7 +105,9 @@ def make_handler(
                     {"out": tmp.name, "PATH": os.environ.get("PATH", "")},
                 )
                 try:
-                    backend.get(gen_name, file_name, tmp.name)
+                    backend.get(
+                        gen_name=gen_name, file_name=file_name, out_path=tmp.name
+                    )
                 except subprocess.CalledProcessError as e:
                     self.send_error(
                         500,
@@ -159,7 +161,9 @@ def make_handler(
                         "running backend set with",
                         {"in": tmp.name, "PATH": os.environ.get("PATH", "")},
                     )
-                    backend.set(gen_name, file_name, tmp.name)
+                    backend.set(
+                        gen_name=gen_name, file_name=file_name, in_path=tmp.name
+                    )
                 except subprocess.CalledProcessError as e:
                     self.send_error(
                         500,
@@ -238,7 +242,11 @@ class LocalRunner(GeneratorRunner):
                         name = file_config["name"]
                         dest_path = dep_dir / name
                         try:
-                            backend.get(dep_name, name, str(dest_path))
+                            backend.get(
+                                gen_name=dep_name,
+                                file_name=name,
+                                out_path=str(dest_path),
+                            )
                         except subprocess.CalledProcessError:
                             print(
                                 f"Error fetching dependency {dep_name}/{name} using backend"
@@ -291,7 +299,9 @@ class LocalRunner(GeneratorRunner):
                                 print(f"Warning: Invalid mode '{mode_str}' for {name}")
 
                         try:
-                            backend.set(var_name, name, str(src_file))
+                            backend.set(
+                                gen_name=var_name, file_name=name, in_path=str(src_file)
+                            )
                         except subprocess.CalledProcessError:
                             print(
                                 f"Error setting output {var_name}/{name} using backend"
