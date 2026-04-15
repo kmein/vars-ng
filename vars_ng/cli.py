@@ -49,6 +49,7 @@ def handle_generate(args: argparse.Namespace) -> None:
         gen_to_backend=gen_to_backend,
         backends=backends,
         nixpkgs_path=args.nixpkgs,
+        assume_yes=args.yes,
     ) as runner:
         for var_name in execution_order:
             var = generators[var_name]
@@ -70,7 +71,7 @@ def handle_generate(args: argparse.Namespace) -> None:
                         f"  -> Would create/update: {file_config['name']} for {var_name}"
                     )
             else:
-                runner.generate(var_name, var)
+                runner.generate(var_name, var, assume_yes=args.yes)
 
 
 def handle_regenerate(args: argparse.Namespace) -> None:
@@ -104,10 +105,11 @@ def handle_regenerate(args: argparse.Namespace) -> None:
             gen_to_backend=gen_to_backend,
             backends=config.backends,
             nixpkgs_path=args.nixpkgs,
+            assume_yes=args.yes,
         ) as runner:
             for var_name in get_execution_order(generators):
                 if var_name in to_regenerate:
-                    runner.generate(var_name, generators[var_name])
+                    runner.generate(var_name, generators[var_name], assume_yes=args.yes)
 
 
 def handle_garbage_collect(args: argparse.Namespace) -> None:
@@ -165,7 +167,9 @@ def handle_garbage_collect(args: argparse.Namespace) -> None:
                     f"  -> Deleting from backend '{backend_name}': {gen_name}/{file_name}"
                 )
                 try:
-                    backend.delete(gen_name=gen_name, file_name=file_name)
+                    backend.delete(
+                        gen_name=gen_name, file_name=file_name, assume_yes=args.yes
+                    )
                 except subprocess.CalledProcessError as e:
                     print(f"Error deleting {gen_name}/{file_name}: {e.stderr}")
 
@@ -196,9 +200,9 @@ def main() -> None:
         "--configuration",
         type=Path,
         required="VARS_CONFIG" not in os.environ,
-        default=Path(os.environ["VARS_CONFIG"])
-        if "VARS_CONFIG" in os.environ
-        else None,
+        default=(
+            Path(os.environ["VARS_CONFIG"]) if "VARS_CONFIG" in os.environ else None
+        ),
         help="Path to config.nix (required unless $VARS_CONFIG is set)",
     )
     parser.add_argument(
@@ -215,6 +219,12 @@ def main() -> None:
         "--no-sandbox",
         action="store_true",
         help="Disable nix sandbox (useful for tests)",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Automatically confirm all backend execution prompts (dangerous)",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)

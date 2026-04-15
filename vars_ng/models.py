@@ -43,17 +43,53 @@ class Backend:
         self.name = name
         self.config = config
 
-    def get(self, *, gen_name: str, file_name: str, out_path: str) -> None:
+    def get(
+        self, *, gen_name: str, file_name: str, out_path: str, assume_yes: bool = False
+    ) -> None:
+        cmd = ["bash", "-c", self.config["get"], "--", gen_name, file_name]
+        if not assume_yes:
+            print(f"\nAbout to run GET for {gen_name}/{file_name}:")
+            print(f"  Command: {' '.join(cmd)}")
+            print(f"  env: out={out_path}")
+            while True:
+                try:
+                    resp = input("Proceed? [y/N]: ").strip().lower()
+                except EOFError:
+                    print("Aborted.")
+                    exit(1)
+                if resp == "y":
+                    break
+                else:
+                    print("Aborted.")
+                    exit(1)
         subprocess.run(
-            ["bash", "-c", self.config["get"], "--", gen_name, file_name],
+            cmd,
             env={"out": out_path, "PATH": os.environ.get("PATH", "")},
             check=True,
             capture_output=True,
         )
 
-    def set(self, *, gen_name: str, file_name: str, in_path: str) -> None:
+    def set(
+        self, *, gen_name: str, file_name: str, in_path: str, assume_yes: bool = False
+    ) -> None:
+        cmd = ["bash", "-c", self.config["set"], "--", gen_name, file_name]
+        if not assume_yes:
+            print(f"\nAbout to run SET for {gen_name}/{file_name}:")
+            print(f"  Command: {' '.join(cmd)}")
+            print(f"  env: in={in_path}")
+            while True:
+                try:
+                    resp = input("Proceed? [y/N]: ").strip().lower()
+                except EOFError:
+                    print("Aborted.")
+                    exit(1)
+                if resp == "y":
+                    break
+                else:
+                    print("Aborted.")
+                    exit(1)
         subprocess.run(
-            ["bash", "-c", self.config["set"], "--", gen_name, file_name],
+            cmd,
             env={"in": in_path, "PATH": os.environ.get("PATH", "")},
             check=True,
             capture_output=True,
@@ -77,11 +113,28 @@ class Backend:
         )
         return [line for line in result.stdout.strip().split("\n") if line]
 
-    def delete(self, *, gen_name: str, file_name: str) -> None:
+    def delete(
+        self, *, gen_name: str, file_name: str, assume_yes: bool = False
+    ) -> None:
         if not self.config.get("delete"):
             return
+        cmd = ["bash", "-c", self.config["delete"], "--", gen_name, file_name]
+        if not assume_yes:
+            print(f"\nAbout to run DELETE for {gen_name}/{file_name}:")
+            print(f"  Command: {' '.join(cmd)}")
+            while True:
+                try:
+                    resp = input("Proceed? [y/N]: ").strip().lower()
+                except EOFError:
+                    print("Aborted.")
+                    exit(1)
+                if resp == "y":
+                    break
+                else:
+                    print("Aborted.")
+                    exit(1)
         subprocess.run(
-            ["bash", "-c", self.config["delete"], "--", gen_name, file_name],
+            cmd,
             check=True,
             capture_output=True,
             text=True,

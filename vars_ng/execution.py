@@ -52,6 +52,7 @@ def make_handler(
     backends: Dict[str, Backend],
     tokens: Dict[str, TokenGrant],
     tokens_lock: threading.Lock,
+    assume_yes: bool,
 ):
     def _lookup_token(auth_header: Optional[str]) -> TokenGrant:
         if not auth_header or not auth_header.startswith("Bearer "):
@@ -106,7 +107,10 @@ def make_handler(
                 )
                 try:
                     backend.get(
-                        gen_name=gen_name, file_name=file_name, out_path=tmp.name
+                        gen_name=gen_name,
+                        file_name=file_name,
+                        out_path=tmp.name,
+                        assume_yes=assume_yes,
                     )
                 except subprocess.CalledProcessError as e:
                     self.send_error(
@@ -162,7 +166,10 @@ def make_handler(
                         {"in": tmp.name, "PATH": os.environ.get("PATH", "")},
                     )
                     backend.set(
-                        gen_name=gen_name, file_name=file_name, in_path=tmp.name
+                        gen_name=gen_name,
+                        file_name=file_name,
+                        in_path=tmp.name,
+                        assume_yes=assume_yes,
                     )
                 except subprocess.CalledProcessError as e:
                     self.send_error(
@@ -194,11 +201,13 @@ class GeneratorRunner(abc.ABC):
         gen_to_backend: Dict[str, str],
         backends: Dict[str, Backend],
         nixpkgs_path: Optional[str],
+        assume_yes: bool = False,
     ):
         self.generators = generators
         self.gen_to_backend = gen_to_backend
         self.backends = backends
         self.nixpkgs_path = nixpkgs_path
+        self.assume_yes = assume_yes
 
     def __enter__(self):
         return self
@@ -207,7 +216,7 @@ class GeneratorRunner(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def generate(self, var_name: str, var: GeneratorConfig) -> None:
+    def generate(self, var_name: str, var: GeneratorConfig, assume_yes: bool) -> None:
         pass
 
 
@@ -220,7 +229,7 @@ class LocalRunner(GeneratorRunner):
     testing or environments where Nix sandboxing is unavailable.
     """
 
-    def generate(self, var_name: str, var: GeneratorConfig) -> None:
+    def generate(self, var_name: str, var: GeneratorConfig, assume_yes: bool) -> None:
         """Runs the specified generator without a nix sandbox (using temporary directories directly)."""
         old_umask = os.umask(0o077)
         try:
@@ -246,6 +255,7 @@ class LocalRunner(GeneratorRunner):
                                 gen_name=dep_name,
                                 file_name=name,
                                 out_path=str(dest_path),
+                                assume_yes=assume_yes,
                             )
                         except subprocess.CalledProcessError:
                             print(
@@ -300,7 +310,10 @@ class LocalRunner(GeneratorRunner):
 
                         try:
                             backend.set(
-                                gen_name=var_name, file_name=name, in_path=str(src_file)
+                                gen_name=var_name,
+                                file_name=name,
+                                in_path=str(src_file),
+                                assume_yes=assume_yes,
                             )
                         except subprocess.CalledProcessError:
                             print(
@@ -338,6 +351,10 @@ class SandboxRunner(GeneratorRunner):
                 self.backends,
                 self.tokens,
                 self.tokens_lock,
+                # Passed via thread state or instance variable?
+                # Actually, SandboxRunner.__enter__ doesn't know assume_yes.
+                # We need to pass it when we make the server or pass it to handler?
+                getattr(self, "assume_yes", False),
             ),
         )
         # Socket must be reachable by the nix build user, which is not us.
@@ -375,15 +392,18 @@ class SandboxRunner(GeneratorRunner):
         self,
         var_name: str,
         var: GeneratorConfig,
+        assume_yes: bool,
     ) -> None:
         """Runs the specified generator inside a nix sandbox using a unix socket to fetch/write files."""
         token = self._mint_token(var_name, var)
         try:
-            self._run_nix_build(var_name, var, token)
+            self._run_nix_build(var_name, var, token, assume_yes)
         finally:
             self._revoke_token(token)
 
-    def _run_nix_build(self, var_name: str, var: GeneratorConfig, token: str) -> None:
+    def _run_nix_build(
+        self, var_name: str, var: GeneratorConfig, token: str, assume_yes: bool
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir = Path(temp_dir_str)
 

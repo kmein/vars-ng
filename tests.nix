@@ -62,7 +62,7 @@
         start_all()
         
         machine.succeed("mkdir -p /tmp/workdir1")
-        machine.succeed("cd /tmp/workdir1 && vars-ng --no-sandbox --configuration ${configNix} generate")
+        machine.succeed("cd /tmp/workdir1 && vars-ng -y --no-sandbox --configuration ${configNix} generate")
 
         out_a = machine.succeed("cat /tmp/workdir1/output/secret/a/a").strip()
         assert out_a == "a", f"Expected 'a', got '{out_a}'"
@@ -71,7 +71,7 @@
 
         machine.succeed("rm /tmp/workdir1/output/secret/a/a")
 
-        machine.succeed("cd /tmp/workdir1 && vars-ng --no-sandbox --configuration ${configNix'} generate")
+        machine.succeed("cd /tmp/workdir1 && vars-ng -y --no-sandbox --configuration ${configNix'} generate")
 
         out_a2 = machine.succeed("cat /tmp/workdir1/output/secret/a/a").strip()
         assert out_a2 == "changed_a", f"Expected 'changed_a', got '{out_a2}'"
@@ -119,7 +119,7 @@
         start_all()
         
         machine.succeed("mkdir -p /tmp/workdir2")
-        machine.succeed("cd /tmp/workdir2 && vars-ng --no-sandbox --configuration ${configIndependent1} generate")
+        machine.succeed("cd /tmp/workdir2 && vars-ng -y --no-sandbox --configuration ${configIndependent1} generate")
         
         # Get modification times
         a_mtime1 = machine.succeed("stat -c %Y /tmp/workdir2/output/secret/a/a").strip()
@@ -129,7 +129,7 @@
         machine.succeed("sleep 1")
         
         # Add 'c' and run generate again
-        machine.succeed("cd /tmp/workdir2 && vars-ng --no-sandbox --configuration ${configIndependent2} generate")
+        machine.succeed("cd /tmp/workdir2 && vars-ng -y --no-sandbox --configuration ${configIndependent2} generate")
 
         # Verify a and b were skipped (mtimes unchanged)
         a_mtime2 = machine.succeed("stat -c %Y /tmp/workdir2/output/secret/a/a").strip()
@@ -169,7 +169,7 @@
         start_all()
         
         machine.succeed("mkdir -p /tmp/workdir3")
-        machine.succeed("cd /tmp/workdir3 && vars-ng --no-sandbox --configuration ${configIndependent2} generate")
+        machine.succeed("cd /tmp/workdir3 && vars-ng -y --no-sandbox --configuration ${configIndependent2} generate")
         
         # Capture baseline file times
         a_mtime1 = machine.succeed("stat -c %Y /tmp/workdir3/output/secret/a/a").strip()
@@ -179,7 +179,7 @@
         machine.succeed("sleep 1")
         
         # Regenerate 'a'. This should delete and rebuild 'a' and 'b' (descendant), but skip 'c'
-        machine.succeed("cd /tmp/workdir3 && vars-ng --no-sandbox --configuration ${configIndependent2} regenerate a")
+        machine.succeed("cd /tmp/workdir3 && vars-ng -y --no-sandbox --configuration ${configIndependent2} regenerate a")
 
         a_mtime2 = machine.succeed("stat -c %Y /tmp/workdir3/output/secret/a/a").strip()
         b_mtime2 = machine.succeed("stat -c %Y /tmp/workdir3/output/secret/b/b").strip()
@@ -218,10 +218,10 @@
       testScript = ''
         start_all()
         
-        machine.fail("vars-ng --no-sandbox --configuration ${configCycle} evaluate")
-        machine.fail("vars-ng --no-sandbox --configuration ${configCycle} generate")
+        machine.fail("vars-ng -y --no-sandbox --configuration ${configCycle} evaluate")
+        machine.fail("vars-ng -y --no-sandbox --configuration ${configCycle} generate")
         
-        output = machine.succeed("vars-ng --no-sandbox --configuration ${configCycle} evaluate 2>&1 || true")
+        output = machine.succeed("vars-ng -y --no-sandbox --configuration ${configCycle} evaluate 2>&1 || true")
         assert "Dependency cycle detected" in output or "VarsError" in output or "cycle" in output.lower(), f"Expected cycle detection error, got: {output}"
       '';
     };
@@ -268,7 +268,7 @@
         start_all()
         
         machine.succeed("mkdir -p /tmp/workdir4")
-        machine.succeed("cd /tmp/workdir4 && vars-ng --no-sandbox --configuration ${configAttrs} generate")
+        machine.succeed("cd /tmp/workdir4 && vars-ng -y --no-sandbox --configuration ${configAttrs} generate")
         
         # Check public key file attributes
         pub_mode = machine.succeed("stat -c '%a' /tmp/workdir4/output/public/ssh_key/pubkey").strip()
@@ -315,7 +315,7 @@
         machine.succeed("mkdir -p /tmp/workdir5")
         
         # Command should fail
-        machine.fail("cd /tmp/workdir5 && vars-ng --no-sandbox --configuration ${configFailure} generate")
+        machine.fail("cd /tmp/workdir5 && vars-ng -y --no-sandbox --configuration ${configFailure} generate")
         
         # Verify the partial file never made it to the final output directory
         machine.fail("test -f /tmp/workdir5/output/secret/fails/partial")
@@ -347,8 +347,8 @@
         machine.succeed("mkdir -p /tmp/workdir6")
         
         # Execute dry runs
-        machine.succeed("cd /tmp/workdir6 && vars-ng --no-sandbox --configuration ${configDryRun} --dry-run generate")
-        machine.succeed("cd /tmp/workdir6 && vars-ng --no-sandbox --configuration ${configDryRun} --dry-run regenerate a")
+        machine.succeed("cd /tmp/workdir6 && vars-ng -y --no-sandbox --configuration ${configDryRun} --dry-run generate")
+        machine.succeed("cd /tmp/workdir6 && vars-ng -y --no-sandbox --configuration ${configDryRun} --dry-run regenerate a")
         
         # Assert nothing was created
         machine.fail("test -d /tmp/workdir6/output")
@@ -389,7 +389,7 @@
         machine.succeed("mkdir -p /tmp/workdir7")
         
         # Generate c, which pulls from both a and b
-        machine.succeed("cd /tmp/workdir7 && vars-ng --no-sandbox --configuration ${configMultiDeps} generate")
+        machine.succeed("cd /tmp/workdir7 && vars-ng -y --no-sandbox --configuration ${configMultiDeps} generate")
         
         # Verify c aggregated both upstream outputs successfully
         out_c = machine.succeed("cat /tmp/workdir7/output/secret/c/c").strip()
@@ -436,7 +436,7 @@
         machine.succeed("mkdir -p /tmp/workdir_gc")
         
         # 1. Initial generation of a, b, c
-        machine.succeed("cd /tmp/workdir_gc && vars-ng --no-sandbox --configuration ${configInitial} generate")
+        machine.succeed("cd /tmp/workdir_gc && vars-ng -y --no-sandbox --configuration ${configInitial} generate")
         machine.succeed("test -f /tmp/workdir_gc/output/secret/a/a")
         machine.succeed("test -f /tmp/workdir_gc/output/secret/b/b")
         machine.succeed("test -f /tmp/workdir_gc/output/secret/c/c")
@@ -446,7 +446,7 @@
         machine.succeed("touch /tmp/workdir_gc/output/secret/rogue/unknown")
 
         # 2. Switch to config where b and c are removed and garbage-collect
-        machine.succeed("cd /tmp/workdir_gc && vars-ng --no-sandbox --configuration ${configRemoved} garbage-collect")
+        machine.succeed("cd /tmp/workdir_gc && vars-ng -y --no-sandbox --configuration ${configRemoved} garbage-collect")
         
         # Verify a is kept, b, c, and rogue are removed
         machine.succeed("test -f /tmp/workdir_gc/output/secret/a/a")
@@ -460,7 +460,7 @@
         machine.succeed("mkdir -p /tmp/workdir_gc/output/secret/rogue")
         machine.succeed("touch /tmp/workdir_gc/output/secret/rogue/unknown")
         
-        machine.succeed("cd /tmp/workdir_gc && vars-ng --no-sandbox --configuration ${configRemoved} garbage-collect")
+        machine.succeed("cd /tmp/workdir_gc && vars-ng -y --no-sandbox --configuration ${configRemoved} garbage-collect")
         
         machine.fail("test -f /tmp/workdir_gc/output/secret/rogue/unknown")
       '';
@@ -491,7 +491,7 @@
         machine.succeed("mkdir -p /tmp/workdir_sqlite")
         
         # Generate with SQLite backend
-        machine.succeed("cd /tmp/workdir_sqlite && vars-ng --no-sandbox --configuration ${configSqlite} generate")
+        machine.succeed("cd /tmp/workdir_sqlite && vars-ng -y --no-sandbox --configuration ${configSqlite} generate")
         
         # Verify database exists
         machine.succeed("test -f /tmp/workdir_sqlite/vars.db")
@@ -541,7 +541,7 @@
         machine.succeed("echo 'AGE-SECRET-KEY-1HCJD5RS0MDD05CPAU4ZM7EAPC6LUZ44D43C7DGVXT5AGSDTCG24S79PK7Y' > /tmp/workdir_age/key.txt")
         
         # Generate with age backend
-        machine.succeed("cd /tmp/workdir_age && vars-ng --no-sandbox --configuration ${configAge} generate || (cat /tmp/age-error.log; exit 1)")
+        machine.succeed("cd /tmp/workdir_age && vars-ng -y --no-sandbox --configuration ${configAge} generate || (cat /tmp/age-error.log; exit 1)")
         
         # Verify files are created and look like age encrypted files
         content_a = machine.succeed("cat /tmp/workdir_age/encrypted/a/a").strip()
