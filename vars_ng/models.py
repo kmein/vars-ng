@@ -23,3 +23,14 @@ class GeneratorConfig(TypedDict):
     prompts: Dict[str, Any]
     runtimeInputs: List[str]
     script: str
+
+class BackendConfig(TypedDict):
+    name: str
+    get: str
+    set: str
+    exists: str
+    generators: set[str]
+
+class VarsConfig(TypedDict):
+    generators: Dict[str, GeneratorConfig]
+    backends: Dict[str, BackendConfig]
