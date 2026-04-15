@@ -6,12 +6,9 @@
       configNix = pkgs.writeText "config.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir1/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir1/output/secret/\$1 && cp \$in /tmp/workdir1/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir1/output/secret/\$1/\$2";
-            generators = pkgs.lib.genAttrs ["a" "b"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir1/output/secret";
+          vars.backend-local.vars = ["a" "b"];
           vars.generators = {
             a = {
               files.a = { };
@@ -33,12 +30,9 @@
       configNix' = pkgs.writeText "config.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir1/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir1/output/secret/\$1 && cp \$in /tmp/workdir1/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir1/output/secret/\$1/\$2";
-            generators = pkgs.lib.genAttrs ["a" "b"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir1/output/secret";
+          vars.backend-local.vars = ["a" "b"];
           vars.generators = {
             a = {
               files.a = { };
@@ -92,12 +86,9 @@
       configIndependent1 = pkgs.writeText "config-indep1.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir2/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir2/output/secret/\$1 && cp -f \$in /tmp/workdir2/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir2/output/secret/\$1/\$2";
-            generators = pkgs.lib.genAttrs ["a" "b"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir2/output/secret";
+          vars.backend-local.vars = ["a" "b"];
           vars.generators = {
             a = { files.a = { }; script = "echo a_run > \"$out\"/a"; };
             b = { dependencies = [ "a" ]; files.b = { }; script = "echo b_run > \"$out\"/b"; };
@@ -107,12 +98,9 @@
       configIndependent2 = pkgs.writeText "config-indep2.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir2/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir2/output/secret/\$1 && cp -f \$in /tmp/workdir2/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir2/output/secret/\$1/\$2";
-            generators = pkgs.lib.genAttrs ["a" "b" "c"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir2/output/secret";
+          vars.backend-local.vars = ["a" "b" "c"];
           vars.generators = {
             a = { files.a = { }; script = "echo a_run > \"$out\"/a"; };
             b = { dependencies = [ "a" ]; files.b = { }; script = "echo b_run > \"$out\"/b"; };
@@ -160,12 +148,9 @@
       configIndependent2 = pkgs.writeText "config-indep2.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir3/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir3/output/secret/\$1 && cp \$in /tmp/workdir3/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir3/output/secret/\$1/\$2";
-            generators = pkgs.lib.genAttrs ["a" "b" "c"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir3/output/secret";
+          vars.backend-local.vars = ["a" "b" "c"];
           vars.generators = {
             a = { files.a = { }; script = "echo a_run > \"$out\"/a"; };
             b = { dependencies = [ "a" ]; files.b = { }; script = "echo b_run > \"$out\"/b"; };
@@ -214,12 +199,9 @@
       configCycle = pkgs.writeText "config-cycle.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir_cycle/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir_cycle/output/secret/\$1 && cp \$in /tmp/workdir_cycle/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir_cycle/output/secret/\$1/\$2";
-            generators = pkgs.lib.genAttrs ["a" "b"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir_cycle/output/secret";
+          vars.backend-local.vars = ["a" "b"];
           vars.generators = {
             a = { dependencies = [ "b" ]; files.a = { }; script = "echo a > \"$out\"/a"; };
             b = { dependencies = [ "a" ]; files.b = { }; script = "echo b > \"$out\"/b"; };
@@ -307,12 +289,9 @@
       configFailure = pkgs.writeText "config-failure.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir5/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir5/output/secret/\$1 && cp \$in /tmp/workdir5/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir5/output/secret/\$1/\$2";
-            generators = pkgs.lib.genAttrs ["fails"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir5/output/secret";
+          vars.backend-local.vars = ["fails"];
           vars.generators = {
             fails = {
               files.partial = { };
@@ -348,12 +327,9 @@
       configDryRun = pkgs.writeText "config-dry-run.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir6/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir6/output/secret/\$1 && cp \$in /tmp/workdir6/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir6/output/secret/\$1/\$2";
-            generators = pkgs.lib.genAttrs ["a"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir6/output/secret";
+          vars.backend-local.vars = ["a"];
           vars.generators = {
             a = { files.a = { }; script = "echo a_run > \"$out\"/a"; };
           };
@@ -384,12 +360,9 @@
       configMultiDeps = pkgs.writeText "config-multi-deps.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir7/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir7/output/secret/\$1 && cp \$in /tmp/workdir7/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir7/output/secret/\$1/\$2";
-            generators = pkgs.lib.genAttrs ["a" "b" "c"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir7/output/secret";
+          vars.backend-local.vars = ["a" "b" "c"];
           vars.generators = {
             a = { files.a = { }; script = "echo a_val > \"$out\"/a"; };
             b = { files.b = { }; script = "echo b_val > \"$out\"/b"; };
@@ -429,14 +402,9 @@
       configInitial = pkgs.writeText "config-initial.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir_gc/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir_gc/output/secret/\$1 && cp \$in /tmp/workdir_gc/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir_gc/output/secret/\$1/\$2";
-            delete = "rm -f /tmp/workdir_gc/output/secret/\$1/\$2 && rmdir /tmp/workdir_gc/output/secret/\$1 2>/dev/null || true";
-            list = "test -d /tmp/workdir_gc/output/secret && cd /tmp/workdir_gc/output/secret && find . -type f -printf '%P\\n' | sed 's|/| |'";
-            generators = pkgs.lib.genAttrs ["a" "b" "c"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir_gc/output/secret";
+          vars.backend-local.vars = ["a" "b" "c"];
           vars.generators = {
             a = { files.a = { }; script = "echo a > \"$out\"/a"; };
             b = { files.b = { }; script = "echo b > \"$out\"/b"; };
@@ -447,14 +415,9 @@
       configRemoved = pkgs.writeText "config-removed.nix" ''
         { pkgs, ... }:
         {
-          vars.backends.local = {
-            get = "cp /tmp/workdir_gc/output/secret/\$1/\$2 \$out";
-            set = "mkdir -p /tmp/workdir_gc/output/secret/\$1 && cp \$in /tmp/workdir_gc/output/secret/\$1/\$2";
-            exists = "test -e /tmp/workdir_gc/output/secret/\$1/\$2";
-            delete = "rm -f /tmp/workdir_gc/output/secret/\$1/\$2 && rmdir /tmp/workdir_gc/output/secret/\$1 2>/dev/null || true";
-            list = "test -d /tmp/workdir_gc/output/secret && cd /tmp/workdir_gc/output/secret && find . -type f -printf '%P\\n' | sed 's|/| |'";
-            generators = pkgs.lib.genAttrs ["a"] (_: { });
-          };
+          vars.backend-local.enable = true;
+          vars.backend-local.directory = "/tmp/workdir_gc/output/secret";
+          vars.backend-local.vars = ["a"];
           vars.generators = {
             a = { files.a = { }; script = "echo a > \"$out\"/a"; };
             # b and c are removed
