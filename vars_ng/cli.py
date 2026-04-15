@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from .evaluator import evaluate_config
-from .utils import get_execution_order, get_descendants
+from .utils import get_execution_order, get_descendants, VarsError
 from .execution import LocalRunner, SandboxRunner
 from .models import GeneratorConfig, Backend
 
@@ -30,9 +30,9 @@ def generator_needs_run(
 
 def handle_generate(args: argparse.Namespace) -> None:
     eval_result = evaluate_config(args.configuration, args.nixpkgs)
-    generators = eval_result["generators"]
-    backends = {k: Backend(k, v) for k, v in eval_result["backends"].items()}
-    gen_to_backend = eval_result["gen_to_backend"]
+    generators = eval_result.generators
+    backends = eval_result.backends
+    gen_to_backend = eval_result.gen_to_backend
 
     execution_order: list[str] = get_execution_order(generators)
 
@@ -75,8 +75,8 @@ def handle_generate(args: argparse.Namespace) -> None:
 
 def handle_regenerate(args: argparse.Namespace) -> None:
     config = evaluate_config(args.configuration, args.nixpkgs)
-    generators = config["generators"]
-    gen_to_backend = config["gen_to_backend"]
+    generators = config.generators
+    gen_to_backend = config.gen_to_backend
 
     if args.target not in generators:
         print(f"Error: Target generator '{args.target}' not found in configuration.")
@@ -102,7 +102,7 @@ def handle_regenerate(args: argparse.Namespace) -> None:
         with runner_cls(
             generators=generators,
             gen_to_backend=gen_to_backend,
-            backends={k: Backend(k, v) for k, v in config["backends"].items()},
+            backends=config.backends,
             nixpkgs_path=args.nixpkgs,
         ) as runner:
             for var_name in get_execution_order(generators):
@@ -112,8 +112,8 @@ def handle_regenerate(args: argparse.Namespace) -> None:
 
 def handle_garbage_collect(args: argparse.Namespace) -> None:
     config = evaluate_config(args.configuration, args.nixpkgs)
-    generators = config["generators"]
-    backends = {k: Backend(k, v) for k, v in config["backends"].items()}
+    generators = config.generators
+    backends = config.backends
 
     for backend_name, backend in backends.items():
         if not backend.config.get("list") or not backend.config.get("delete"):
@@ -174,14 +174,14 @@ def handle_evaluate(args: argparse.Namespace) -> None:
     data = evaluate_config(args.configuration, args.nixpkgs)
 
     # Check for cycles. This will raise an error if a cycle is detected.
-    get_execution_order(data["generators"])
+    get_execution_order(data.generators)
 
     print(
         json.dumps(
             {
-                "generators": data["generators"],
-                "gen_to_backend": data["gen_to_backend"],
-                "backends": data["backends"],
+                "generators": data.generators,
+                "gen_to_backend": data.gen_to_backend,
+                "backends": {k: v.config for k, v in data.backends.items()},
             },
             indent=2,
         )
@@ -239,11 +239,15 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.command == "generate":
-        handle_generate(args)
-    elif args.command == "regenerate":
-        handle_regenerate(args)
-    elif args.command == "garbage-collect":
-        handle_garbage_collect(args)
-    elif args.command == "evaluate":
-        handle_evaluate(args)
+    try:
+        if args.command == "generate":
+            handle_generate(args)
+        elif args.command == "regenerate":
+            handle_regenerate(args)
+        elif args.command == "garbage-collect":
+            handle_garbage_collect(args)
+        elif args.command == "evaluate":
+            handle_evaluate(args)
+    except VarsError as e:
+        print(str(e))
+        exit(1)

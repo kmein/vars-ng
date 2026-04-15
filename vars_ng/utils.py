@@ -1,7 +1,6 @@
-from pathlib import Path
 from typing import Dict, List
 from graphlib import TopologicalSorter
-from .models import GeneratorConfig, FileConfig
+from .models import GeneratorConfig
 
 
 def get_execution_order(generators: Dict[str, GeneratorConfig]) -> List[str]:
@@ -13,16 +12,13 @@ def get_execution_order(generators: Dict[str, GeneratorConfig]) -> List[str]:
     try:
         return list(ts.static_order())
     except Exception as e:
-        print(f"Error: Dependency cycle detected in configuration:\n{e}")
-        exit(1)
+        raise VarsError(f"Dependency cycle detected in configuration:\n{e}")
 
 
-def get_file_dest_path(output_dir: str, file_config: FileConfig) -> Path:
-    """Determines the destination path for a generated file based on its configuration."""
-    visibility = "secret" if file_config["secret"] else "public"
-    generator_name = file_config["generator"]
-    name = file_config["name"]
-    return Path(output_dir) / visibility / generator_name / name
+class VarsError(Exception):
+    """Base exception for vars-ng errors."""
+
+    pass
 
 
 def get_descendants(target: str, generators: Dict[str, GeneratorConfig]) -> set[str]:

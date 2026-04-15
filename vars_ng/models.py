@@ -1,4 +1,5 @@
 from typing import Dict, Any, List, Optional, TypedDict
+from dataclasses import dataclass
 import subprocess
 import os
 
@@ -87,6 +88,8 @@ class Backend:
         )
 
 
-class VarsConfig(TypedDict):
+@dataclass
+class VarsConfig:
     generators: Dict[str, GeneratorConfig]
-    backends: Dict[str, BackendConfig]
+    backends: Dict[str, Backend]
+    gen_to_backend: Dict[str, str]

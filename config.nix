@@ -1,24 +1,13 @@
 { lib, ... }:
 {
-  vars.backends.local = let varsDir = "/tmp/vars"; in {
-    get = ''
-      cp ${varsDir}/$1/$2 $out
-    '';
-    set = ''
-      mkdir -p ${varsDir}/$1
-      cp -f $in ${varsDir}/$1/$2
-    '';
-    exists = ''
-      test -e ${varsDir}/$1/$2
-    '';
-    delete = ''
-      rm -f ${varsDir}/$1/$2
-      rmdir ${varsDir}/$1 2>/dev/null || true
-    '';
-    list = ''
-      test -d ${varsDir} && cd ${varsDir} && find . -type f -printf "%P\n" | sed 's|/| |'
-    '';
-    generators = lib.genAttrs [ "simple" "a" "b" ] (_: { });
+  var.backend-local = {
+    enable = true;
+    directory = "/tmp/vars";
+    vars = [
+      "simple"
+      "a"
+      "b"
+    ];
   };
 
   vars.generators = {

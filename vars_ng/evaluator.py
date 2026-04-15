@@ -1,10 +1,9 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Optional, Any, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .models import VarsConfig
+from typing import Optional, Any
+from .models import VarsConfig, Backend
+from .utils import VarsError
 
 
 def nix_instantiate(expr: str) -> Any:
@@ -18,13 +17,12 @@ def nix_instantiate(expr: str) -> Any:
         )
         return json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
-        print(f"Error evaluating nix expression:\n{e.stderr}")
-        exit(1)
+        raise VarsError(f"Error evaluating nix expression:\n{e.stderr}")
 
 
 def evaluate_config(
     configuration_path: Path, nixpkgs_path: Optional[str] = None
-) -> "VarsConfig":
+) -> VarsConfig:
     """Evaluates the given config.nix file and returns the vars configuration."""
     # Note: options.nix is now adjacent to this module instead of main.py
     options_nix_path = Path(__file__).parent / "options.nix"
@@ -53,13 +51,17 @@ in
 
     # Process backends and build gen_to_backend mapping
     gen_to_backend = {}
+    backend_objects = {}
     backends = result.get("backends", {})
     for backend_name, backend_config in backends.items():
         gen_keys = list(backend_config.get("generators", {}).keys())
         for gen in gen_keys:
             gen_to_backend[gen] = backend_name
         backend_config["generators"] = set(gen_keys)
+        backend_objects[backend_name] = Backend(backend_name, backend_config)
 
-    result["gen_to_backend"] = gen_to_backend
-
-    return result
+    return VarsConfig(
+        generators=result.get("generators", {}),
+        backends=backend_objects,
+        gen_to_backend=gen_to_backend,
+    )
