@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.optional-dependencies]
+test = ["pytest"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -21,4 +24,7 @@ packages = ["vars_ng"]
 "vars_ng/backend-local.nix" = "vars_ng/backend-local.nix"
 "vars_ng/backend-sqlite.nix" = "vars_ng/backend-sqlite.nix"
 "vars_ng/backend-age.nix" = "vars_ng/backend-age.nix"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 

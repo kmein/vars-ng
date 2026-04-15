@@ -20,6 +20,7 @@
           ps: with ps; [
             ty
             ruff
+            pytest
           ]
         );
         vars-ng = pkgs.python3Packages.buildPythonApplication {
@@ -31,12 +32,14 @@
           nativeCheckInputs = [
             pkgs.ty
             pkgs.ruff
+            pkgs.python3Packages.pytest
           ];
 
           checkPhase = ''
             runHook preCheck
             ruff check .
             ruff format --check .
+            PYTHONPATH="$PWD:$PYTHONPATH" pytest tests/
             runHook postCheck
           '';
         };
