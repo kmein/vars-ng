@@ -47,7 +47,7 @@
                 The output values of these generators will be available to the generator script as files.
                 For example, the file 'file1' of a dependency named 'dep1' will be available via $in/dep1/file1.
               '';
-              type = lib.types.listOf lib.types.str;
+              type = lib.types.listOf (lib.types.strMatching "[a-zA-Z0-9:_\\.-]*");
               default = [ ];
             };
             files = lib.mkOption {

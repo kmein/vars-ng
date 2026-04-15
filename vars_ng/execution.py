@@ -1,16 +1,25 @@
 import abc
 import http.server
+import hmac
 import os
+import secrets
 import shutil
 import socketserver
 import subprocess
 import tempfile
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set, Tuple
 
 from .models import GeneratorConfig, FileConfig
 from .utils import get_file_dest_path
+
+
+# Max request body the daemon will accept from a sandboxed script (per POST).
+# Generator/file/dependency names and runtimeInputs shape are enforced by the
+# nixos module (options.nix), so python trusts them as safe to interpolate.
+MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 
 class HttpError(Exception):
@@ -19,36 +28,69 @@ class HttpError(Exception):
         self.message = message
 
 
+@dataclass
+class TokenGrant:
+    """What a single bearer token is allowed to do.
+
+    reads: set of (generator_name, file_name) this token may GET
+    writes: set of (generator_name, file_name) this token may POST
+    """
+
+    generator: str
+    reads: Set[Tuple[str, str]] = field(default_factory=set)
+    writes: Set[Tuple[str, str]] = field(default_factory=set)
+
+
 class UnixSocketHttpServer(socketserver.UnixStreamServer):
     def get_request(self):
-        request, client_address = super().get_request()
-        return (request, ["local", 0])
+        request, _client_address = super().get_request()
+        return (request, ("local", 0))
 
 
-def make_handler(generators: Dict[str, GeneratorConfig], output_dir: str):
-    class Handler(http.server.SimpleHTTPRequestHandler):
+def make_handler(
+    generators: Dict[str, GeneratorConfig],
+    output_dir: str,
+    tokens: Dict[str, TokenGrant],
+    tokens_lock: threading.Lock,
+):
+    def _lookup_token(auth_header: Optional[str]) -> TokenGrant:
+        if not auth_header or not auth_header.startswith("Bearer "):
+            raise HttpError(401, "Missing bearer token")
+        presented = auth_header[len("Bearer ") :].strip()
+        with tokens_lock:
+            # Constant-time compare against every live token to avoid leaking
+            # which prefix matched via timing.
+            for tok, grant in tokens.items():
+                if hmac.compare_digest(tok, presented):
+                    return grant
+        raise HttpError(403, "Unknown or revoked token")
+
+    def _parse_path(path: str) -> Tuple[str, str]:
+        parts = path.strip("/").split("/")
+        if len(parts) != 2 or not all(parts):
+            raise HttpError(400, "Bad Request")
+        return parts[0], parts[1]
+
+    class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, format, *args):
-            pass  # Suppress logging
+            pass  # Suppress default stderr access log
 
-        def _get_file_config(self) -> FileConfig:
-            parts = self.path.strip("/").split("/")
-            if len(parts) != 2:
-                raise HttpError(400, "Bad Request")
-
-            var_name, file_name = parts
-            var = generators.get(var_name)
+        def _get_file_config(self, gen_name: str, file_name: str) -> FileConfig:
+            var = generators.get(gen_name)
             if not var:
                 raise HttpError(404, "Generator not found")
-
             for file_config in var["files"].values():
                 if file_config["name"] == file_name:
                     return file_config
-
             raise HttpError(404, "File not found in generator")
 
         def do_GET(self):
             try:
-                file_config = self._get_file_config()
+                grant = _lookup_token(self.headers.get("Authorization"))
+                gen_name, file_name = _parse_path(self.path)
+                if (gen_name, file_name) not in grant.reads:
+                    raise HttpError(403, "Read not permitted for this token")
+                file_config = self._get_file_config(gen_name, file_name)
             except HttpError as e:
                 self.send_error(e.code, e.message)
                 return
@@ -67,28 +109,38 @@ def make_handler(generators: Dict[str, GeneratorConfig], output_dir: str):
 
         def do_POST(self):
             try:
-                file_config = self._get_file_config()
+                grant = _lookup_token(self.headers.get("Authorization"))
+                gen_name, file_name = _parse_path(self.path)
+                if (gen_name, file_name) not in grant.writes:
+                    raise HttpError(403, "Write not permitted for this token")
+                file_config = self._get_file_config(gen_name, file_name)
             except HttpError as e:
                 self.send_error(e.code, e.message)
                 return
 
             content_length = int(self.headers.get("Content-Length", 0))
+            if content_length < 0 or content_length > MAX_UPLOAD_BYTES:
+                self.send_error(413, "Payload too large")
+                return
             post_data = self.rfile.read(content_length)
 
             dest_path = get_file_dest_path(output_dir, file_config)
             dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(dest_path, "wb") as f:
+            # Write via tempfile + rename so a crash mid-write never leaves a
+            # half-written secret on disk.
+            tmp_path = dest_path.with_suffix(dest_path.suffix + ".tmp")
+            with open(tmp_path, "wb") as f:
                 f.write(post_data)
-
-            mode_str = file_config.get("mode")
+            mode_str = file_config["mode"]
             if mode_str:
                 try:
-                    dest_path.chmod(int(mode_str, 8))
+                    tmp_path.chmod(int(mode_str, 8))
                 except ValueError:
                     print(
                         f"Warning: Invalid mode '{mode_str}' for {file_config['name']}"
                     )
+            os.replace(tmp_path, dest_path)
 
             self.send_response(200)
             self.end_headers()
@@ -214,18 +266,24 @@ class SandboxRunner(GeneratorRunner):
     """
 
     def __enter__(self):
-        self.tmpdir = Path("/tmp/sandbox-test")
-        self.tmpdir.mkdir(parents=True, exist_ok=True)
-        self.tmpdir.chmod(0o777)
+        # Unique dir per run, owned by current user. Short path so the unix
+        # socket stays under the ~104 byte sun_path limit.
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="vars-ng-", dir="/tmp"))
+        os.chmod(self.tmpdir, 0o755)
 
         self.socket_path = self.tmpdir / "vars.sock"
-        if self.socket_path.exists():
-            self.socket_path.unlink()
+        self.tokens: Dict[str, TokenGrant] = {}
+        self.tokens_lock = threading.Lock()
 
         self.server = UnixSocketHttpServer(
-            str(self.socket_path), make_handler(self.generators, self.output_dir)
+            str(self.socket_path),
+            make_handler(
+                self.generators, self.output_dir, self.tokens, self.tokens_lock
+            ),
         )
-        os.chmod(str(self.socket_path), 0o777)
+        # Socket must be reachable by the nix build user, which is not us.
+        # Auth token (not filesystem perms) is what actually gates access.
+        os.chmod(str(self.socket_path), 0o666)
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.daemon = True
         self.thread.start()
@@ -234,6 +292,25 @@ class SandboxRunner(GeneratorRunner):
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.server.shutdown()
         self.server.server_close()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _mint_token(self, var_name: str, var: GeneratorConfig) -> str:
+        """Create a scoped bearer token for one generator run."""
+        token = secrets.token_urlsafe(32)
+        grant = TokenGrant(generator=var_name)
+        for dep_name in var["dependencies"]:
+            dep_gen = self.generators[dep_name]
+            for file_config in dep_gen["files"].values():
+                grant.reads.add((dep_name, file_config["name"]))
+        for file_config in var["files"].values():
+            grant.writes.add((var_name, file_config["name"]))
+        with self.tokens_lock:
+            self.tokens[token] = grant
+        return token
+
+    def _revoke_token(self, token: str) -> None:
+        with self.tokens_lock:
+            self.tokens.pop(token, None)
 
     def generate(
         self,
@@ -241,42 +318,61 @@ class SandboxRunner(GeneratorRunner):
         var: GeneratorConfig,
     ) -> None:
         """Runs the specified generator inside a nix sandbox using a unix socket to fetch/write files."""
+        token = self._mint_token(var_name, var)
+        try:
+            self._run_nix_build(var_name, var, token)
+        finally:
+            self._revoke_token(token)
+
+    def _run_nix_build(self, var_name: str, var: GeneratorConfig, token: str) -> None:
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir = Path(temp_dir_str)
 
-            # Construct the bash script to execute inside the sandbox
-            setup_script = ["export in=$(mktemp -d)", "export out=$(mktemp -d)"]
+            # Curl invocations share these flags. -H passes the bearer token,
+            # which the daemon matches against the per-run token table.
+            curl_base = (
+                f"curl --fail -sS --unix-socket {self.socket_path} "
+                f'-H "Authorization: Bearer $VARS_TOKEN"'
+            )
 
-            # Fetch dependencies
+            setup_script = [
+                f"export VARS_TOKEN={token}",
+                "export in=$(mktemp -d)",
+                "export out=$(mktemp -d)",
+            ]
+
             for dep_name in var["dependencies"]:
                 dep_gen = self.generators[dep_name]
                 setup_script.append(f"mkdir -p $in/{dep_name}")
                 for file_config in dep_gen["files"].values():
                     file_name = file_config["name"]
                     setup_script.append(
-                        f"curl --fail -s --unix-socket {self.socket_path} http://localhost/{dep_name}/{file_name} -o $in/{dep_name}/{file_name}"
+                        f"{curl_base} http://localhost/{dep_name}/{file_name} "
+                        f"-o $in/{dep_name}/{file_name}"
                     )
 
-            script_content = var["script"]
-
-            # Upload outputs
             upload_script = []
             for file_config in var["files"].values():
                 file_name = file_config["name"]
                 upload_script.append(
-                    f"curl --fail -s -X POST --unix-socket {self.socket_path} --data-binary @$out/{file_name} http://localhost/{var_name}/{file_name}"
+                    f"{curl_base} -X POST --data-binary @$out/{file_name} "
+                    f"http://localhost/{var_name}/{file_name}"
                 )
 
-            full_script = (
+            # Subshell keeps our $out redefinition from clobbering Nix's $out.
+            bash = (
                 "set -euo pipefail\n"
-                + "\n(" # run in a subshell to avoid overwriting the Nix environment's $out
+                "(\n"
                 + "\n".join(setup_script)
                 + "\n"
-                + script_content
+                + var["script"].rstrip("\n")
+                + "\n"
                 + "\n".join(upload_script)
                 + "\n)\n"
-                + "mkdir -p $out\n"
+                "mkdir -p $out\n"
             )
+            # Escape for nix indented string: '' terminates, ${...} antiquotes.
+            full_script = bash.replace("''", "'''").replace("${", "''${")
 
             runtime_inputs_str = " ".join(var["runtimeInputs"])
             nixpkgs = self.nixpkgs_path or "<nixpkgs>"
