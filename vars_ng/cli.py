@@ -84,7 +84,9 @@ def handle_regenerate(args: argparse.Namespace) -> None:
     to_regenerate = get_descendants(args.target, generators)
     to_regenerate.add(args.target)
 
-    print(f"Regenerating {args.target} and its dependents: {', '.join(sorted(to_regenerate))}")
+    print(
+        f"Regenerating {args.target} and its dependents: {', '.join(sorted(to_regenerate))}"
+    )
 
     for gen_name in to_regenerate:
         gen = generators[gen_name]

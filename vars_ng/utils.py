@@ -33,7 +33,6 @@ def get_execution_order(generators: Dict[str, GeneratorConfig]) -> List[str]:
         raise VarsError(f"Dependency cycle detected in configuration:\n{e}")
 
 
-
 class VarsError(Exception):
     """Base exception for vars-ng errors."""
 
@@ -88,4 +87,3 @@ def get_ancestors(target: str, generators: Dict[str, GeneratorConfig]) -> set[st
         return generators[n]["dependencies"]
 
     return _dfs_traversal(target, get_dependencies)
-
