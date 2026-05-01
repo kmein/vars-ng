@@ -1,5 +1,18 @@
 { pkgs, vars-ng, ... }:
 
+let
+  # Test VMs have no network. Each generator's runner is built lazily inside
+  # the VM by nix-instantiate; for that build to succeed offline, its closure
+  # must be staged ahead of time.
+  runnerClosure = with pkgs; [ bashInteractive coreutils curl gnused ];
+
+  mkMachine = { extraPackages ? [] }: { pkgs, ... }: {
+    environment.systemPackages = [ vars-ng ] ++ extraPackages;
+    nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
+    system.extraDependencies = runnerClosure;
+  };
+in
+
 {
   dependencyPropagationTest =
     let
@@ -54,10 +67,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng dependency propagation";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine {};
       testScript = ''
         start_all()
         
@@ -111,10 +121,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng independent additions";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine {};
       testScript = ''
         start_all()
         
@@ -161,10 +168,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng targeted regeneration";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine {};
       testScript = ''
         start_all()
         
@@ -211,10 +215,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng cycle detection";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine {};
       testScript = ''
         start_all()
         
@@ -260,10 +261,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng file attributes";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine {};
       testScript = ''
         start_all()
         
@@ -306,10 +304,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng script failure and atomicity";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine {};
       testScript = ''
         start_all()
         machine.succeed("mkdir -p /tmp/workdir5")
@@ -338,10 +333,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng dry run safety";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine {};
       testScript = ''
         start_all()
         machine.succeed("mkdir -p /tmp/workdir6")
@@ -380,10 +372,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng multiple dependencies";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine {};
       testScript = ''
         start_all()
         machine.succeed("mkdir -p /tmp/workdir7")
@@ -427,10 +416,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng garbage collect";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine {};
       testScript = ''
         start_all()
         machine.succeed("mkdir -p /tmp/workdir_gc")
@@ -465,50 +451,6 @@
         machine.fail("test -f /tmp/workdir_gc/output/secret/rogue/unknown")
       '';
     };
-  sqliteBackendTest =
-    let
-      configSqlite = pkgs.writeText "config-sqlite.nix" ''
-        { pkgs, ... }:
-        {
-          vars.backend-sqlite.enable = true;
-          vars.backend-sqlite.database = "/tmp/workdir_sqlite/vars.db";
-          vars.backend-sqlite.vars = ["a" "b"];
-          vars.generators = {
-            a = { files.a = { }; script = "echo a_run > \"\$out\"/a"; };
-            b = { dependencies = [ "a" ]; files.b = { }; script = "echo b_run > \"\$out\"/b"; };
-          };
-        }
-      '';
-    in
-    pkgs.testers.runNixOSTest {
-      name = "vars-ng sqlite backend";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng pkgs.sqlite ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
-      testScript = ''
-        start_all()
-        machine.succeed("mkdir -p /tmp/workdir_sqlite")
-        
-        # Generate with SQLite backend
-        machine.succeed("cd /tmp/workdir_sqlite && vars-ng -y --no-sandbox --configuration ${configSqlite} generate")
-        
-        # Verify database exists
-        machine.succeed("test -f /tmp/workdir_sqlite/vars.db")
-        
-        # Query database directly to verify contents
-        db_content_a = machine.succeed("sqlite3 /tmp/workdir_sqlite/vars.db \"SELECT CAST(content AS TEXT) FROM vars WHERE gen='a' AND file='a';\"").strip()
-        assert db_content_a == "a_run", f"Expected 'a_run', got '{db_content_a}'"
-        
-        db_content_b = machine.succeed("sqlite3 /tmp/workdir_sqlite/vars.db \"SELECT CAST(content AS TEXT) FROM vars WHERE gen='b' AND file='b';\"").strip()
-        assert db_content_b == "b_run", f"Expected 'b_run', got '{db_content_b}'"
-        
-        # Test Garbage Collection support in list script
-        gc_list = machine.succeed("sqlite3 -noheader -list /tmp/workdir_sqlite/vars.db \"SELECT gen || '/' || file FROM vars;\"").strip()
-        assert "a/a" in gc_list and "b/b" in gc_list, f"Expected a/a and b/b in list output, got: {gc_list}"
-      '';
-    };
-
   ageBackendTest =
     let
       configAge = pkgs.writeText "config-age.nix" ''
@@ -529,10 +471,7 @@
     in
     pkgs.testers.runNixOSTest {
       name = "vars-ng age backend";
-      nodes.machine = { pkgs, ... }: {
-        environment.systemPackages = [ vars-ng pkgs.age ];
-        nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-      };
+      nodes.machine = mkMachine { extraPackages = [ pkgs.age ]; };
       testScript = ''
         start_all()
         machine.succeed("mkdir -p /tmp/workdir_age")

@@ -68,14 +68,12 @@ class FileConfig(TypedDict):
 
 
 class GeneratorConfig(TypedDict):
-    """Represents the configuration for a generator, including its dependencies, output files, and script."""
+    """Represents the configuration for a generator, including its dependencies and output files."""
 
     dependencies: List[str]
     files: Dict[str, FileConfig]
     name: str
     prompts: Dict[str, Any]
-    runtimeInputs: List[str]
-    script: str
 
 
 class BackendConfig(TypedDict):

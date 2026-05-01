@@ -269,6 +269,58 @@
               type = lib.types.either lib.types.str lib.types.path;
               default = "";
             };
+            runner = lib.mkOption {
+              description = ''
+                Bash script that wraps `script` with a curl prelude (fetches
+                declared dependencies over $VARS_SOCKET) and postlude
+                (uploads generated files back). Composed entirely in Nix
+                from `runtimeInputs`, `dependencies`, `files`, and `script` —
+                the orchestrator just writes this string to a temp file and
+                runs it. Lazy: never forced for skipped generators.
+              '';
+              type = lib.types.lines;
+              internal = true;
+              readOnly = true;
+              default =
+                let
+                  genName = generator.config._module.args.name;
+                  binPath = lib.makeBinPath ([ pkgs.curl pkgs.coreutils ] ++ generator.config.runtimeInputs);
+                  fetchDeps = lib.concatMapStringsSep "\n" (depName:
+                    let
+                      depFiles = lib.attrValues config.vars.generators.${depName}.files;
+                    in
+                    ''mkdir -p "$in/${depName}"'' + "\n" + lib.concatMapStringsSep "\n" (f: ''
+                      curl "''${curl_args[@]}" "http://localhost/${depName}/${f.name}" -o "$in/${depName}/${f.name}"
+                    '') depFiles
+                  ) generator.config.dependencies;
+                  uploadFiles = lib.concatMapStringsSep "\n" (f: ''
+                    curl "''${curl_args[@]}" -X POST --data-binary @"$out/${f.name}" "http://localhost/${genName}/${f.name}"
+                  '') (lib.attrValues generator.config.files);
+                in
+                ''
+                  #!${pkgs.runtimeShell}
+                  set -euo pipefail
+                  umask 077
+                  export PATH=${binPath}:''${PATH:-}
+                  : "''${VARS_TOKEN:?VARS_TOKEN must be set}"
+                  : "''${VARS_SOCKET:?VARS_SOCKET must be set}"
+                  curl_args=( --fail -sS --unix-socket "$VARS_SOCKET" -H "Authorization: Bearer $VARS_TOKEN" )
+
+                  in=$(mktemp -d)
+                  out=$(mktemp -d)
+                  export in out
+                  trap 'rm -rf "$in" "$out"' EXIT
+
+                  ${fetchDeps}
+
+                  (
+                    ${generator.config.script}
+                  )
+
+                  ${uploadFiles}
+                '';
+              defaultText = "Nix-composed bash script wrapping the generator";
+            };
           };
         })
       );

@@ -1,6 +1,6 @@
-import abc
 import http.server
 import hmac
+import json
 import os
 import secrets
 import shutil
@@ -12,13 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
+from .evaluator import runner_expr
 from .models import GeneratorConfig, FileConfig, Backend
 from .utils import VarsError
 
 
-# Max request body the daemon will accept from a sandboxed script (per POST).
-# Generator/file/dependency names and runtimeInputs shape are enforced by the
-# nixos module (options.nix), so python trusts them as safe to interpolate.
+# Max upload the daemon will accept from a generator script.
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 
@@ -30,10 +29,9 @@ class HttpError(Exception):
 
 @dataclass
 class TokenGrant:
-    """What a single bearer token is allowed to do.
+    """Bearer-token capabilities for a single generator run.
 
-    reads: set of (generator_name, file_name) this token may GET
-    writes: set of (generator_name, file_name) this token may POST
+    reads/writes are sets of (generator_name, file_name) pairs.
     """
 
     generator: str
@@ -60,8 +58,6 @@ def make_handler(
             raise HttpError(401, "Missing bearer token")
         presented = auth_header[len("Bearer ") :].strip()
         with tokens_lock:
-            # Constant-time compare against every live token to avoid leaking
-            # which prefix matched via timing.
             for tok, grant in tokens.items():
                 if hmac.compare_digest(tok, presented):
                     return grant
@@ -73,18 +69,18 @@ def make_handler(
             raise HttpError(400, "Bad Request")
         return parts[0], parts[1]
 
+    def _file_config(gen_name: str, file_name: str) -> FileConfig:
+        var = generators.get(gen_name)
+        if not var:
+            raise HttpError(404, "Generator not found")
+        for fc in var["files"].values():
+            if fc["name"] == file_name:
+                return fc
+        raise HttpError(404, "File not found in generator")
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, format, *args):
             pass
-
-        def _get_file_config(self, gen_name: str, file_name: str) -> FileConfig:
-            var = generators.get(gen_name)
-            if not var:
-                raise HttpError(404, "Generator not found")
-            for file_config in var["files"].values():
-                if file_config["name"] == file_name:
-                    return file_config
-            raise HttpError(404, "File not found in generator")
 
         def do_GET(self):
             try:
@@ -92,19 +88,13 @@ def make_handler(
                 gen_name, file_name = _parse_path(self.path)
                 if (gen_name, file_name) not in grant.reads:
                     raise HttpError(403, "Read not permitted for this token")
-                _ = self._get_file_config(gen_name, file_name)
+                _file_config(gen_name, file_name)
             except HttpError as e:
                 self.send_error(e.code, e.message)
                 return
 
-            backend_name = gen_to_backend[gen_name]
-            backend = backends[backend_name]
-
+            backend = backends[gen_to_backend[gen_name]]
             with tempfile.NamedTemporaryFile() as tmp:
-                print(
-                    "running backend get with",
-                    {"out": tmp.name, "PATH": os.environ.get("PATH", "")},
-                )
                 try:
                     backend.get(
                         gen_name=gen_name,
@@ -124,7 +114,6 @@ def make_handler(
                 self.send_header("Content-type", "application/octet-stream")
                 self.send_header("Content-Length", str(size))
                 self.end_headers()
-
                 with open(tmp.name, "rb") as f:
                     shutil.copyfileobj(f, self.wfile)
 
@@ -134,7 +123,7 @@ def make_handler(
                 gen_name, file_name = _parse_path(self.path)
                 if (gen_name, file_name) not in grant.writes:
                     raise HttpError(403, "Write not permitted for this token")
-                _ = self._get_file_config(gen_name, file_name)
+                fc = _file_config(gen_name, file_name)
             except HttpError as e:
                 self.send_error(e.code, e.message)
                 return
@@ -143,28 +132,18 @@ def make_handler(
             if content_length < 0 or content_length > MAX_UPLOAD_BYTES:
                 self.send_error(413, "Payload too large")
                 return
-            post_data = self.rfile.read(content_length)
+            body = self.rfile.read(content_length)
 
-            backend_name = gen_to_backend[gen_name]
-            backend = backends[backend_name]
-
+            backend = backends[gen_to_backend[gen_name]]
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 try:
-                    tmp.write(post_data)
+                    tmp.write(body)
                     tmp.close()
-
-                    file_config = self._get_file_config(gen_name, file_name)
-                    mode_str = file_config["mode"]
-                    if mode_str:
+                    if fc["mode"]:
                         try:
-                            os.chmod(tmp.name, int(mode_str, 8))
+                            os.chmod(tmp.name, int(fc["mode"], 8))
                         except ValueError:
                             pass
-
-                    print(
-                        "running backend set with",
-                        {"in": tmp.name, "PATH": os.environ.get("PATH", "")},
-                    )
                     backend.set(
                         gen_name=gen_name,
                         file_name=file_name,
@@ -187,12 +166,14 @@ def make_handler(
     return Handler
 
 
-class GeneratorRunner(abc.ABC):
-    """
-    Abstract base class for executing configuration generators.
+class Runner:
+    """Realizes generator runners (Nix derivations) and executes them.
 
-    Provides a context manager interface for setting up and tearing down
-    any necessary execution environment (like temporary directories or servers).
+    A single background HTTP daemon serves dependency reads and output
+    uploads over a unix socket; the runner script (composed in Nix from
+    `vars.generators.<name>.runner`) talks to it via curl. In sandbox
+    mode the runner is invoked from inside a tiny `runCommand` so the
+    nix sandbox isolates it; in local mode it is exec'd directly.
     """
 
     def __init__(
@@ -200,145 +181,26 @@ class GeneratorRunner(abc.ABC):
         generators: Dict[str, GeneratorConfig],
         gen_to_backend: Dict[str, str],
         backends: Dict[str, Backend],
+        configuration_path: Path,
         nixpkgs_path: Optional[str],
+        sandbox: bool,
         assume_yes: bool = False,
     ):
         self.generators = generators
         self.gen_to_backend = gen_to_backend
         self.backends = backends
+        self.configuration_path = configuration_path
         self.nixpkgs_path = nixpkgs_path
+        self.sandbox = sandbox
         self.assume_yes = assume_yes
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-    @abc.abstractmethod
-    def generate(self, var_name: str, var: GeneratorConfig, assume_yes: bool) -> None:
-        pass
-
-
-class LocalRunner(GeneratorRunner):
-    """
-    Executes generators locally without isolation.
-
-    Uses standard temporary directories to provide inputs and capture outputs.
-    Dependencies are copied directly on the host filesystem. This is useful for
-    testing or environments where Nix sandboxing is unavailable.
-    """
-
-    def generate(self, var_name: str, var: GeneratorConfig, assume_yes: bool) -> None:
-        """Runs the specified generator without a nix sandbox (using temporary directories directly)."""
-        old_umask = os.umask(0o077)
-        try:
-            with tempfile.TemporaryDirectory() as temp_dir_str:
-                temp_dir = Path(temp_dir_str)
-                in_dir = temp_dir / "in"
-                out_dir = temp_dir / "out"
-                in_dir.mkdir()
-                out_dir.mkdir()
-
-                # Set up inputs from dependencies
-                for dep_name in var["dependencies"]:
-                    dep_gen = self.generators[dep_name]
-                    dep_dir = in_dir / dep_name
-                    dep_dir.mkdir(exist_ok=True)
-                    backend_name = self.gen_to_backend[dep_name]
-                    backend = self.backends[backend_name]
-                    for file_config in dep_gen["files"].values():
-                        name = file_config["name"]
-                        dest_path = dep_dir / name
-                        try:
-                            backend.get(
-                                gen_name=dep_name,
-                                file_name=name,
-                                out_path=str(dest_path),
-                                assume_yes=assume_yes,
-                            )
-                        except subprocess.CalledProcessError:
-                            raise VarsError(
-                                f"Error fetching dependency {dep_name}/{name} using backend"
-                            )
-
-                # Prepare environment
-                env = os.environ.copy()
-                env["in"] = str(in_dir)
-                env["out"] = str(out_dir)
-
-                # Prepare PATH with runtimeInputs
-                runtime_inputs = var["runtimeInputs"]
-                bin_paths = [str(Path(p) / "bin") for p in runtime_inputs]
-                # Include host PATH so bash etc. are found
-                env["PATH"] = (
-                    ":".join(bin_paths)
-                    + ":"
-                    + env.get("PATH", os.environ.get("PATH", ""))
-                )
-
-                # Write and execute script
-                script_content = var["script"]
-                script_path = temp_dir / "script.sh"
-                script_path.write_text(
-                    f"#!/usr/bin/env bash\nset -euo pipefail\numask 077\n{script_content}"
-                )
-                script_path.chmod(script_path.stat().st_mode | 0o111)
-
-                try:
-                    subprocess.run(
-                        [str(script_path)], env=env, check=True, cwd=str(temp_dir)
-                    )
-                except subprocess.CalledProcessError:
-                    raise VarsError(f"Error executing script for generator {var_name}")
-
-                # Move generated files to destination
-                backend_name = self.gen_to_backend[var_name]
-                backend = self.backends[backend_name]
-                for file_config in var["files"].values():
-                    name = file_config["name"]
-                    src_file = out_dir / name
-                    if src_file.exists():
-                        mode_str = file_config["mode"]
-                        if mode_str:
-                            try:
-                                src_file.chmod(int(mode_str, 8))
-                            except ValueError:
-                                print(f"Warning: Invalid mode '{mode_str}' for {name}")
-
-                        try:
-                            backend.set(
-                                gen_name=var_name,
-                                file_name=name,
-                                in_path=str(src_file),
-                                assume_yes=assume_yes,
-                            )
-                        except subprocess.CalledProcessError:
-                            raise VarsError(
-                                f"Error setting output {var_name}/{name} using backend"
-                            )
-        finally:
-            os.umask(old_umask)
-
-
-class SandboxRunner(GeneratorRunner):
-    """
-    Executes generators strictly isolated within a Nix sandbox.
-
-    Starts a background HTTP server listening on a Unix domain socket. The
-    sandboxed generator script uses `curl` over this socket to fetch its
-    declared dependencies and to upload its generated outputs back to the host.
-    """
-
-    def __enter__(self):
-        # Unique dir per run, owned by current user. Short path so the unix
-        # socket stays under the ~104 byte sun_path limit.
-        self.tmpdir = Path(tempfile.mkdtemp(prefix="vars-ng-", dir="/tmp"))
-        os.chmod(self.tmpdir, 0o755)
-
-        self.socket_path = self.tmpdir / "vars.sock"
         self.tokens: Dict[str, TokenGrant] = {}
         self.tokens_lock = threading.Lock()
+        self._runner_cache: Dict[str, str] = {}
+
+    def __enter__(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="vars-ng-", dir="/tmp"))
+        os.chmod(self.tmpdir, 0o755)
+        self.socket_path = self.tmpdir / "vars.sock"
 
         self.server = UnixSocketHttpServer(
             str(self.socket_path),
@@ -351,11 +213,10 @@ class SandboxRunner(GeneratorRunner):
                 self.assume_yes,
             ),
         )
-        # Socket must be reachable by the nix build user, which is not us.
-        # Auth token (not filesystem perms) is what actually gates access.
+        # The socket must be reachable by the nix build user (a different uid
+        # in sandbox mode); the bearer token, not the file mode, gates access.
         os.chmod(str(self.socket_path), 0o666)
-        self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.daemon = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         return self
 
@@ -365,15 +226,13 @@ class SandboxRunner(GeneratorRunner):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def _mint_token(self, var_name: str, var: GeneratorConfig) -> str:
-        """Create a scoped bearer token for one generator run."""
         token = secrets.token_urlsafe(32)
         grant = TokenGrant(generator=var_name)
         for dep_name in var["dependencies"]:
-            dep_gen = self.generators[dep_name]
-            for file_config in dep_gen["files"].values():
-                grant.reads.add((dep_name, file_config["name"]))
-        for file_config in var["files"].values():
-            grant.writes.add((var_name, file_config["name"]))
+            for fc in self.generators[dep_name]["files"].values():
+                grant.reads.add((dep_name, fc["name"]))
+        for fc in var["files"].values():
+            grant.writes.add((var_name, fc["name"]))
         with self.tokens_lock:
             self.tokens[token] = grant
         return token
@@ -382,102 +241,99 @@ class SandboxRunner(GeneratorRunner):
         with self.tokens_lock:
             self.tokens.pop(token, None)
 
-    def generate(
-        self,
-        var_name: str,
-        var: GeneratorConfig,
-        assume_yes: bool,
-    ) -> None:
-        """Runs the specified generator inside a nix sandbox using a unix socket to fetch/write files."""
+    def _runner_script(self, var_name: str) -> str:
+        """Evaluates the per-generator runner script (a string) from Nix.
+
+        The script is composed in Nix using lib.makeBinPath, lib.concatMapStringsSep,
+        etc. — Python does not assemble bash. Nothing is built; only evaluation.
+        """
+        if var_name in self._runner_cache:
+            return self._runner_cache[var_name]
+        expr = runner_expr(self.configuration_path, self.nixpkgs_path, var_name)
+        env = os.environ.copy()
+        if self.nixpkgs_path:
+            env["NIX_PATH"] = f"nixpkgs={self.nixpkgs_path}"
+        try:
+            result = subprocess.run(
+                ["nix-instantiate", "--eval", "--json", "--strict", "-E", expr],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise VarsError(
+                f"Failed to evaluate runner for {var_name}:\n{e.stderr or e.stdout}"
+            )
+        script: str = json.loads(result.stdout)
+        self._runner_cache[var_name] = script
+        return script
+
+    def generate(self, var_name: str, var: GeneratorConfig, assume_yes: bool) -> None:
+        script = self._runner_script(var_name)
         token = self._mint_token(var_name, var)
         try:
-            self._run_nix_build(var_name, var, token, assume_yes)
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".sh", delete=False, dir=str(self.tmpdir)
+            ) as f:
+                f.write(script)
+                runner_path = f.name
+            os.chmod(runner_path, 0o755)
+            if self.sandbox:
+                self._run_sandboxed(runner_path, token)
+            else:
+                self._run_local(runner_path, token)
+        except subprocess.CalledProcessError:
+            raise VarsError(f"Error executing script for generator {var_name}")
         finally:
             self._revoke_token(token)
 
-    def _run_nix_build(
-        self, var_name: str, var: GeneratorConfig, token: str, assume_yes: bool
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir_str:
-            temp_dir = Path(temp_dir_str)
+    def _run_local(self, runner_path: str, token: str) -> None:
+        env = os.environ.copy()
+        env["VARS_SOCKET"] = str(self.socket_path)
+        env["VARS_TOKEN"] = token
+        old_umask = os.umask(0o077)
+        try:
+            subprocess.run([runner_path], env=env, check=True)
+        finally:
+            os.umask(old_umask)
 
-            # Curl invocations share these flags. -H passes the bearer token,
-            # which the daemon matches against the per-run token table.
-            curl_base = (
-                f"curl --fail -sS --unix-socket {self.socket_path} "
-                f'-H "Authorization: Bearer $VARS_TOKEN"'
-            )
-
-            setup_script = [
-                f"export VARS_TOKEN={token}",
-                "export in=$(mktemp -d)",
-                "export out=$(mktemp -d)",
-            ]
-
-            for dep_name in var["dependencies"]:
-                dep_gen = self.generators[dep_name]
-                setup_script.append(f"mkdir -p $in/{dep_name}")
-                for file_config in dep_gen["files"].values():
-                    file_name = file_config["name"]
-                    setup_script.append(
-                        f"{curl_base} http://localhost/{dep_name}/{file_name} "
-                        f"-o $in/{dep_name}/{file_name}"
-                    )
-
-            upload_script = []
-            for file_config in var["files"].values():
-                file_name = file_config["name"]
-                upload_script.append(
-                    f"{curl_base} -X POST --data-binary @$out/{file_name} "
-                    f"http://localhost/{var_name}/{file_name}"
-                )
-
-            # Subshell keeps our $out redefinition from clobbering Nix's $out.
-            bash = (
-                "set -euo pipefail\n"
-                "(\n"
-                + "\n".join(setup_script)
-                + "\n"
-                + var["script"].rstrip("\n")
-                + "\n"
-                + "\n".join(upload_script)
-                + "\n)\n"
-                "mkdir -p $out\n"
-            )
-            # Escape for nix indented string: '' terminates, ${...} antiquotes.
-            full_script = bash.replace("''", "'''").replace("${", "''${")
-
-            runtime_inputs_str = " ".join(var["runtimeInputs"])
-            nixpkgs = self.nixpkgs_path or "<nixpkgs>"
-
-            nix_expr = f"""
-            let
-              pkgs = import {nixpkgs} {{}};
-            in
-            pkgs.runCommand "vars-generator-{var_name}" {{
-              buildInputs = [ pkgs.curl ] ++ [ {runtime_inputs_str} ];
-            }} ''
-              {full_script}
-            ''
-            """
-
-            expr_path = temp_dir / "expr.nix"
-            expr_path.write_text(nix_expr)
-
-            cmd = [
-                "nix-build",
-                "--no-out-link",
-                "--option",
-                "extra-sandbox-paths",
-                str(self.socket_path),
-                str(expr_path),
-            ]
-
-            env = os.environ.copy()
-            if self.nixpkgs_path:
-                env["NIX_PATH"] = f"nixpkgs={self.nixpkgs_path}"
-
-            try:
-                subprocess.run(cmd, env=env, check=True)
-            except subprocess.CalledProcessError:
-                raise VarsError(f"Error executing script for generator {var_name}")
+    def _run_sandboxed(self, runner_path: str, token: str) -> None:
+        nixpkgs = self.nixpkgs_path or "<nixpkgs>"
+        # Tiny static wrapper: one runCommand per generator-run, no
+        # per-generator script templating. The token enters the derivation
+        # hash (--argstr) so concurrent runs don't collide; both the socket
+        # and the runner script are allowed via extra-sandbox-paths.
+        expr = f"""
+{{ runner, socket, token }}:
+let pkgs = import {nixpkgs} {{}}; in
+pkgs.runCommand "vars-sandbox-${{builtins.substring 0 8 token}}" {{
+  VARS_SOCKET = socket;
+  VARS_TOKEN = token;
+}} ''
+  bash ${{runner}}
+  mkdir -p $out
+''
+"""
+        cmd = [
+            "nix-build",
+            "--no-out-link",
+            "--option",
+            "extra-sandbox-paths",
+            f"{self.socket_path} {runner_path}",
+            "--argstr",
+            "runner",
+            runner_path,
+            "--argstr",
+            "socket",
+            str(self.socket_path),
+            "--argstr",
+            "token",
+            token,
+            "-E",
+            expr,
+        ]
+        env = os.environ.copy()
+        if self.nixpkgs_path:
+            env["NIX_PATH"] = f"nixpkgs={self.nixpkgs_path}"
+        subprocess.run(cmd, env=env, check=True)

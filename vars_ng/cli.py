@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .evaluator import evaluate_config
 from .utils import get_execution_order, get_descendants, VarsError
-from .execution import LocalRunner, SandboxRunner
+from .execution import Runner
 from .models import GeneratorConfig, Backend
 
 
@@ -41,14 +41,13 @@ def handle_generate(args: argparse.Namespace) -> None:
 
     print("Execution order:")
 
-    # Use sandbox runner by default, but allow disabling it for testing or special environments
-    runner_cls = LocalRunner if args.no_sandbox else SandboxRunner
-
-    with runner_cls(
+    with Runner(
         generators=generators,
         gen_to_backend=gen_to_backend,
         backends=backends,
+        configuration_path=args.configuration,
         nixpkgs_path=args.nixpkgs,
+        sandbox=not args.no_sandbox,
         assume_yes=args.yes,
     ) as runner:
         for var_name in execution_order:
@@ -95,15 +94,14 @@ def handle_regenerate(args: argparse.Namespace) -> None:
                     f"  -> [DRY-RUN] Would update: {file_config['name']} for {gen_name}"
                 )
 
-    # For targeted regeneration, we run generate with a target subset if supported.
-    # Currently, `handle_generate` doesn't take targets, so we instantiate the runner directly.
     if not args.dry_run:
-        runner_cls = LocalRunner if args.no_sandbox else SandboxRunner
-        with runner_cls(
+        with Runner(
             generators=generators,
             gen_to_backend=gen_to_backend,
             backends=config.backends,
+            configuration_path=args.configuration,
             nixpkgs_path=args.nixpkgs,
+            sandbox=not args.no_sandbox,
             assume_yes=args.yes,
         ) as runner:
             for var_name in get_execution_order(generators):
